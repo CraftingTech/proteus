@@ -325,3 +325,95 @@ a {
 .btn:hover {
   background: color-mix(in srgb, var(--accent) 40%, var(--panel));
 }
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  border-color: color-mix(in srgb, #c45c5c 55%, var(--line));
+  background: color-mix(in srgb, #8a3b3b 28%, var(--panel));
+  padding: 0.35rem 0.55rem;
+  font-size: 0.85rem;
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, #8a3b3b 45%, var(--panel));
+}
+
+.toolbar {
+  margin-bottom: 1rem;
+}
+
+.form-panel h2 {
+  margin-top: 0;
+}
+
+.backend-toggle {
+  display: flex;
+  gap: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.radio,
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text);
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.form-grid input,
+.form-grid select {
+  background: #121820;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  width: 100%;
+}
+
+.form-span-2 {
+  grid-column: 1 / -1;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.badge.phase-ready {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, #243040);
+}
+
+.badge.phase-failed {
+  color: #e8a0a0;
+  background: color-mix(in srgb, #8a3b3b 35%, #243040);
+}
+
+@media (max-width: 900px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}

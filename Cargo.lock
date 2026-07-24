@@ -2995,6 +2995,7 @@ dependencies = [
  "gloo-timers",
  "serde",
  "serde_json",
+ "web-sys",
 ]
 
 [[package]]
