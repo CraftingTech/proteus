@@ -24,17 +24,35 @@ pub enum ApiError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     #[error("kubernetes error: {0}")]
-    Kubernetes(#[from] kube::Error),
+    Kubernetes(kube::Error),
 
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+impl From<kube::Error> for ApiError {
+    fn from(err: kube::Error) -> Self {
+        match &err {
+            kube::Error::Api(api) if api.code == 404 => ApiError::NotFound(api.message.clone()),
+            kube::Error::Api(api) if api.code == 409 => ApiError::Conflict(api.message.clone()),
+            _ => ApiError::Kubernetes(err),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::Conflict(_) => StatusCode::CONFLICT,
             ApiError::Kubernetes(_) => StatusCode::BAD_GATEWAY,
             ApiError::Internal(_) | ApiError::Bind { .. } | ApiError::Serve { .. } => {
                 StatusCode::INTERNAL_SERVER_ERROR

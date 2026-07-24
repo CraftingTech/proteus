@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +18,46 @@ pub struct RepositoryListItem {
     pub phase: Option<String>,
     pub backend: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRepositoryRequest {
+    pub name: String,
+    pub namespace: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub encryption_enabled: bool,
+    pub backend: CreateRepositoryBackend,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum CreateRepositoryBackend {
+    #[serde(rename = "local")]
+    Local { path: String },
+    #[serde(rename = "s3")]
+    S3 {
+        bucket: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
+        /// Optional: use an existing Secret instead of pasting keys.
+        #[serde(
+            rename = "credentialsSecretRef",
+            skip_serializing_if = "Option::is_none"
+        )]
+        credentials_secret_ref: Option<String>,
+        #[serde(rename = "accessKeyId", skip_serializing_if = "Option::is_none")]
+        access_key_id: Option<String>,
+        #[serde(rename = "secretAccessKey", skip_serializing_if = "Option::is_none")]
+        secret_access_key: Option<String>,
+        #[serde(rename = "forcePathStyle")]
+        force_path_style: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -67,6 +107,21 @@ fn api_url(path: &str) -> String {
     }
 }
 
+async fn read_error_body(response: gloo_net::http::Response) -> String {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
+            return format!("HTTP {status}: {err}");
+        }
+    }
+    if body.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        format!("HTTP {status}: {body}")
+    }
+}
+
 async fn get_json<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, ApiClientError> {
     let url = api_url(path);
     let response = gloo_net::http::Request::get(&url)
@@ -77,15 +132,15 @@ async fn get_json<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, ApiClie
         })?;
 
     let status = response.status();
+    if !(200..300).contains(&status) {
+        return Err(ApiClientError {
+            message: read_error_body(response).await,
+        });
+    }
+
     let body = response.text().await.map_err(|err| ApiClientError {
         message: format!("failed to read body: {err}"),
     })?;
-
-    if !(200..300).contains(&status) {
-        return Err(ApiClientError {
-            message: format!("HTTP {status}: {body}"),
-        });
-    }
 
     if body.trim_start().starts_with('<') {
         return Err(ApiClientError {
@@ -100,12 +155,94 @@ async fn get_json<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, ApiClie
     })
 }
 
+async fn send_json<T: for<'de> Deserialize<'de>, B: Serialize>(
+    method: &str,
+    path: &str,
+    body: &B,
+) -> Result<T, ApiClientError> {
+    let url = api_url(path);
+    let payload = serde_json::to_string(body).map_err(|err| ApiClientError {
+        message: format!("failed to serialize body: {err}"),
+    })?;
+    let request = match method {
+        "POST" => gloo_net::http::Request::post(&url),
+        "PATCH" => gloo_net::http::Request::patch(&url),
+        _ => {
+            return Err(ApiClientError {
+                message: format!("unsupported method {method}"),
+            })
+        }
+    };
+    let response = request
+        .header("Content-Type", "application/json")
+        .body(payload)
+        .map_err(|err| ApiClientError {
+            message: format!("failed to build request: {err}"),
+        })?
+        .send()
+        .await
+        .map_err(|err| ApiClientError {
+            message: format!("request failed: {err}"),
+        })?;
+
+    let status = response.status();
+    if !(200..300).contains(&status) {
+        return Err(ApiClientError {
+            message: read_error_body(response).await,
+        });
+    }
+
+    let body = response.text().await.map_err(|err| ApiClientError {
+        message: format!("failed to read body: {err}"),
+    })?;
+    serde_json::from_str(&body).map_err(|err| ApiClientError {
+        message: format!("invalid JSON: {err}"),
+    })
+}
+
+async fn send_empty(method: &str, path: &str) -> Result<(), ApiClientError> {
+    let url = api_url(path);
+    let request = match method {
+        "DELETE" => gloo_net::http::Request::delete(&url),
+        _ => {
+            return Err(ApiClientError {
+                message: format!("unsupported method {method}"),
+            })
+        }
+    };
+    let response = request.send().await.map_err(|err| ApiClientError {
+        message: format!("request failed: {err}"),
+    })?;
+    let status = response.status();
+    if !(200..300).contains(&status) {
+        return Err(ApiClientError {
+            message: read_error_body(response).await,
+        });
+    }
+    Ok(())
+}
+
 pub async fn get_cluster() -> Result<ClusterSnapshot, ApiClientError> {
     get_json("/api/v1/cluster").await
 }
 
 pub async fn list_repositories() -> Result<Vec<RepositoryListItem>, ApiClientError> {
     get_json("/api/v1/repositories").await
+}
+
+pub async fn create_repository(
+    req: &CreateRepositoryRequest,
+) -> Result<RepositoryListItem, ApiClientError> {
+    send_json("POST", "/api/v1/repositories", req).await
+}
+
+pub async fn delete_repository(namespace: &str, name: &str) -> Result<(), ApiClientError> {
+    let path = format!(
+        "/api/v1/repositories/{}/{}",
+        urlencoding_lite(namespace),
+        urlencoding_lite(name)
+    );
+    send_empty("DELETE", &path).await
 }
 
 pub async fn list_backups() -> Result<Vec<BackupListItem>, ApiClientError> {

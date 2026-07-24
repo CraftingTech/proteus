@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -9,6 +9,29 @@ use super::traits::{ObjectStore, PutOptions, StoredObject};
 use crate::error::{CoreError, CoreResult};
 use crate::hash::ContentId;
 
+/// Expand `~` / `~/…` using `$HOME` (or `$USERPROFILE` on Windows).
+pub fn expand_local_path(path: impl AsRef<str>) -> PathBuf {
+    let path = path.as_ref().trim();
+    if path.is_empty() {
+        return PathBuf::new();
+    }
+    if path == "~" {
+        return home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 /// Layout: `{root}/{id[0..2]}/{id}.blob`
 #[derive(Clone, Debug)]
 pub struct LocalBackend {
@@ -16,8 +39,8 @@ pub struct LocalBackend {
 }
 
 impl LocalBackend {
-    pub async fn open(root: impl AsRef<Path>) -> CoreResult<Self> {
-        let root = root.as_ref().to_path_buf();
+    pub async fn open(root: impl AsRef<str>) -> CoreResult<Self> {
+        let root = expand_local_path(root.as_ref());
         fs::create_dir_all(&root)
             .await
             .map_err(|source| CoreError::LocalIo {
@@ -25,6 +48,37 @@ impl LocalBackend {
                 source,
             })?;
         Ok(Self { root })
+    }
+
+    /// Ensure `path` exists (creating parents) and is writable. Expands `~`.
+    pub async fn probe(path: impl AsRef<str>) -> CoreResult<PathBuf> {
+        let root = expand_local_path(path.as_ref());
+        if root.as_os_str().is_empty() {
+            return Err(CoreError::InvalidArgument(
+                "local backend path must not be empty".into(),
+            ));
+        }
+        fs::create_dir_all(&root)
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: root.clone(),
+                source,
+            })?;
+
+        let probe = root.join(".proteus-write-probe");
+        fs::write(&probe, b"ok")
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: probe.clone(),
+                source,
+            })?;
+        fs::remove_file(&probe)
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: probe,
+                source,
+            })?;
+        Ok(root)
     }
 
     fn object_path(&self, id: &ContentId) -> PathBuf {
@@ -136,7 +190,9 @@ mod tests {
     #[tokio::test]
     async fn put_get_round_trip() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = LocalBackend::open(dir.path()).await.expect("open");
+        let store = LocalBackend::open(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("open");
         let data = Bytes::from_static(b"hello-cas");
         let id = hash_bytes(&data);
         store
@@ -145,5 +201,43 @@ mod tests {
             .expect("put");
         let got = store.get(&id).await.expect("get");
         assert_eq!(got, data);
+    }
+
+    #[tokio::test]
+    async fn probe_accepts_writable_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        LocalBackend::probe(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("probe");
+    }
+
+    #[tokio::test]
+    async fn probe_creates_missing_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("nested").join("repo");
+        let resolved = LocalBackend::probe(nested.to_str().expect("utf8"))
+            .await
+            .expect("probe creates");
+        assert!(resolved.is_dir());
+    }
+
+    #[tokio::test]
+    async fn expand_tilde() {
+        std::env::set_var("HOME", "/tmp/proteus-home-test");
+        assert_eq!(
+            expand_local_path("~/backup"),
+            PathBuf::from("/tmp/proteus-home-test/backup")
+        );
+        assert_eq!(
+            expand_local_path("~"),
+            PathBuf::from("/tmp/proteus-home-test")
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_rejects_impossible_path() {
+        let path = "/proc/proteus-no-such-dir/nested";
+        let err = LocalBackend::probe(path).await.expect_err("should fail");
+        assert!(matches!(err, CoreError::LocalIo { .. }));
     }
 }

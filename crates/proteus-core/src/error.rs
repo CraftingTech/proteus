@@ -22,8 +22,8 @@ pub enum CoreError {
     #[error("invalid encryption key: {0}")]
     InvalidKey(String),
 
-    #[error("S3 backend not implemented: {0}")]
-    S3NotImplemented(String),
+    #[error("S3 error: {0}")]
+    S3(String),
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
