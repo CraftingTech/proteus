@@ -17,7 +17,7 @@ pub fn Shell() -> Element {
                     Link { to: Route::Cluster {}, "Cluster" }
                     Link { to: Route::Repositories {}, "Repositories" }
                     Link { to: Route::Backups {}, "Backups" }
-                    Link { to: Route::Pvcs {}, "PVCs" }
+                    Link { to: Route::Inventory {}, "Inventory" }
                 }
             }
             main { class: "content",

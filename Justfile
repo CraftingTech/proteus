@@ -57,9 +57,14 @@ build-ui:
     cp -a "$src"/. crates/proteus-ui/dist/
     echo "UI assets → crates/proteus-ui/dist"
 
-# Hot-reload UI only (no kube required)
+# Hot-reload UI on :5173 — needs the controller API on :8080 in another terminal (`just run`).
+# Embedded path (`just run` alone) uses relative /api URLs; no CORS needed.
 ui:
-    dx serve -p proteus-ui --platform web
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "UI hot-reload → http://127.0.0.1:5173"
+    echo "API expected  → http://127.0.0.1:8080  (run: just run)"
+    PROTEUS_API_BASE=http://127.0.0.1:8080 dx serve -p proteus-ui --platform web --port 5173 --open false
 
 # --- CRDs -------------------------------------------------------------------
 

@@ -14,12 +14,22 @@ What this project is, the problem it solves, and its domain language. The non-de
 - External / bolt-on backup stacks add operational weight; Proteus keeps CAS (dedup, chunking, encryption, compression) inside the operator and exposes day-2 ops through the UI
 - Goal: durable, deduplicated backups with restore as a first-class CR — operable from the UI as the primary path
 
-## Scope (MVP)
+## Scope (MVP) — validated 2026-07-24
 
-- **UI is required** for the MVP (not a later nice-to-have)
-- Inventory and back up **PVCs** (list PVCs; backup flows centered on volume data)
-- **Single Kubernetes cluster** only (no multi-cluster / cross-cluster migration in MVP)
-- Backup destinations configurable from the UI: S3-compatible, local path / URL-style targets (repository setup)
+- **UI is required** (not a later nice-to-have)
+- **Single Kubernetes cluster** only
+- **Cluster inventory** in the UI: Deployments, Pods, Services, PVCs, ConfigMaps, Secrets (metadata only). Filters: namespace + kind + name search
+- Backup destinations from the UI: **local AND S3-compatible** (both required)
+- **Manual** PVC backup selection (no cron in MVP)
+- **Encryption at rest** of backup data: **one key per Repository**, material in a Kubernetes Secret ref (no key rotation in MVP)
+- **Restore any successful backup** to a target PVC/namespace — required for MVP to be useful
+
+## Out of scope (MVP)
+
+- Multi-cluster / cross-cluster migration
+- Cron / scheduled PVC policies (tracked post-MVP)
+- Inventory kinds beyond the v1 set (StatefulSets, Ingress, Jobs, …)
+- File-level browse restore; compression; advanced retention UX; key rotation
 
 ## Domain language
 
@@ -33,8 +43,11 @@ What this project is, the problem it solves, and its domain language. The non-de
 
 ## Key features
 
-- Embedded UI to configure repositories, schedule/trigger backups, and inspect status (Kopia-inspired operator UX)
+- Embedded UI: cluster inventory, repositories, manual backup/restore, status
 - Custom Resources: `ProteusRepository`, `ProteusBackup`, `ProteusRestore` (`proteus.io/v1alpha1`)
-- CAS engine with local + S3-oriented backends
-- PVC-centric backup inventory on one cluster
+- CAS engine with local + S3-compatible backends and encrypted payloads
 - Kubernetes operator (`kube-rs` + Tokio) serving the Dioxus UI and API from the controller binary
+
+## Roadmap
+
+Tracked on GitHub: https://github.com/CraftingTech/proteus/issues/1

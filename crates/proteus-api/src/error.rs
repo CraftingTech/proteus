@@ -21,6 +21,9 @@ pub enum ApiError {
         source: std::io::Error,
     },
 
+    #[error("bad request: {0}")]
+    BadRequest(String),
+
     #[error("kubernetes error: {0}")]
     Kubernetes(#[from] kube::Error),
 
@@ -31,6 +34,7 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
+            ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::Kubernetes(_) => StatusCode::BAD_GATEWAY,
             ApiError::Internal(_) | ApiError::Bind { .. } | ApiError::Serve { .. } => {
                 StatusCode::INTERNAL_SERVER_ERROR
