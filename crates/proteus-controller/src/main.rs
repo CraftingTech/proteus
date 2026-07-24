@@ -2,21 +2,14 @@ mod controllers;
 mod error;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
-use kube::{Api, Client};
+use anyhow::{Context, Result};
 use proteus_api::{router, serve, ApiState, ClusterSnapshot};
-use tracing::{info, warn, level_filters::LevelFilter};
+use tracing::{info, level_filters::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::controllers::ControllerSet;
-
-const REQUIRED_CRDS: &[&str] = &[
-    "proteusrepositories.proteus.io",
-    "proteusbackups.proteus.io",
-    "proteusrestores.proteus.io",
-];
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,15 +19,21 @@ async fn main() -> Result<()> {
         .await
         .context("failed to build Kubernetes client (check KUBECONFIG / ~/.kube/config)")?;
 
-    ensure_crds(&client).await?;
+    let api_state = ApiState::new(
+        client.clone(),
+        ClusterSnapshot {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            repositories: 0,
+            backups: 0,
+            restores: 0,
+            last_reconcile_at: None,
+        },
+    );
+    api_state.refresh_readiness().await;
+    if let Err(err) = api_state.refresh_counts().await {
+        warn!(error = %err, "initial CR count refresh failed");
+    }
 
-    let api_state = ApiState::new(ClusterSnapshot {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        repositories: 0,
-        backups: 0,
-        restores: 0,
-        last_reconcile_at: None,
-    });
     let controllers = ControllerSet::new(client, api_state.clone());
 
     let api_addr: SocketAddr = match std::env::var("PROTEUS_API_ADDR") {
@@ -43,6 +42,16 @@ async fn main() -> Result<()> {
     }
     .parse()
     .context("invalid PROTEUS_API_ADDR")?;
+
+    let readiness_poll = {
+        let state = api_state.clone();
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                state.refresh_readiness().await;
+            }
+        }
+    };
 
     let api = serve(api_addr, router(api_state));
     let reconcile = controllers.run();
@@ -56,36 +65,10 @@ async fn main() -> Result<()> {
     tokio::select! {
         result = api => result.context("API server exited")?,
         result = reconcile => result.context("controller set exited")?,
+        () = readiness_poll => anyhow::bail!("readiness poll terminated"),
     }
 
     Ok(())
-}
-
-async fn ensure_crds(client: &Client) -> Result<()> {
-    let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
-    let mut missing = Vec::new();
-
-    for name in REQUIRED_CRDS {
-        match crds.get(name).await {
-            Ok(_) => info!(crd = %name, "CRD present"),
-            Err(kube::Error::Api(err)) if err.code == 404 => missing.push(*name),
-            Err(err) => {
-                return Err(err).with_context(|| format!("failed to check CRD {name}"));
-            }
-        }
-    }
-
-    if missing.is_empty() {
-        return Ok(());
-    }
-
-    warn!(?missing, "required CRDs missing from the cluster");
-    bail!(
-        "missing CRDs: {}\n\
-         Install them with: just ensure-crds\n\
-         (or: kubectl apply -k deploy/kustomize/crds)",
-        missing.join(", ")
-    );
 }
 
 fn init_tracing() -> Result<()> {

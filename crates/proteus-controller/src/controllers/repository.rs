@@ -37,7 +37,10 @@ pub async fn reconcile_repository(
     api.patch_status(&name, &PatchParams::default(), &Patch::Merge(&patch))
         .await?;
 
-    ctx.api_state.snapshot.write().last_reconcile_at = Some(Utc::now().to_rfc3339());
+    if let Err(err) = ctx.api_state.refresh_counts().await {
+        tracing::warn!(error = %err, "failed to refresh cluster snapshot counts");
+        ctx.api_state.mark_reconciled();
+    }
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 

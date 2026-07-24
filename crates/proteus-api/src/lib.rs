@@ -5,13 +5,15 @@
 #![deny(clippy::panic)]
 
 mod error;
+mod inventory;
+mod resources;
 mod routes;
 mod state;
 mod ui;
 
 pub use error::{ApiError, ApiResult};
 pub use routes::router;
-pub use state::{ApiState, ClusterSnapshot};
+pub use state::{ApiState, ClusterSnapshot, REQUIRED_CRDS};
 
 use std::net::SocketAddr;
 
