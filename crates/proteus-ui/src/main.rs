@@ -1,4 +1,5 @@
 mod api;
+mod components;
 mod pages;
 mod shell;
 

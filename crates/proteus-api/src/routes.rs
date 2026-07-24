@@ -1,13 +1,15 @@
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::error::ApiResult;
 use crate::inventory::{list_inventory, InventoryItem, InventoryQuery};
+use crate::namespaces::{list_namespaces, NamespaceItem};
 use crate::resources::{
     list_backups, list_repositories, list_restores, BackupListItem, RepositoryListItem,
     RestoreListItem,
@@ -16,6 +18,15 @@ use crate::state::{ApiState, ClusterSnapshot};
 use crate::ui::static_handler;
 
 pub fn router(state: ApiState) -> Router {
+    // Allow `just ui` (dx on :5173) to call the controller API on :8080.
+    let cors = CorsLayer::new()
+        .allow_origin([
+            "http://127.0.0.1:5173".parse::<HeaderValue>().expect("origin"),
+            "http://localhost:5173".parse::<HeaderValue>().expect("origin"),
+        ])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+        .allow_headers(Any);
+
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -24,8 +35,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/backups", get(backups))
         .route("/api/v1/restores", get(restores))
         .route("/api/v1/inventory", get(inventory))
+        .route("/api/v1/namespaces", get(namespaces))
         .route("/metrics", get(metrics_placeholder))
         .fallback(static_handler)
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -75,6 +88,10 @@ async fn inventory(
     Query(query): Query<InventoryQuery>,
 ) -> ApiResult<Json<Vec<InventoryItem>>> {
     Ok(Json(list_inventory(&state, &query).await?))
+}
+
+async fn namespaces(State(state): State<ApiState>) -> ApiResult<Json<Vec<NamespaceItem>>> {
+    Ok(Json(list_namespaces(&state).await?))
 }
 
 async fn metrics_placeholder(State(state): State<ApiState>) -> String {

@@ -54,8 +54,22 @@ impl std::fmt::Display for ApiClientError {
     }
 }
 
+/// Empty when embedded in the controller (`just run`). Set at compile time for `just ui`.
+fn api_url(path: &str) -> String {
+    const BASE: &str = match option_env!("PROTEUS_API_BASE") {
+        Some(base) => base,
+        None => "",
+    };
+    if BASE.is_empty() {
+        path.to_string()
+    } else {
+        format!("{BASE}{path}")
+    }
+}
+
 async fn get_json<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, ApiClientError> {
-    let response = gloo_net::http::Request::get(path)
+    let url = api_url(path);
+    let response = gloo_net::http::Request::get(&url)
         .send()
         .await
         .map_err(|err| ApiClientError {
@@ -63,14 +77,25 @@ async fn get_json<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, ApiClie
         })?;
 
     let status = response.status();
+    let body = response.text().await.map_err(|err| ApiClientError {
+        message: format!("failed to read body: {err}"),
+    })?;
+
     if !(200..300).contains(&status) {
-        let body = response.text().await.unwrap_or_default();
         return Err(ApiClientError {
             message: format!("HTTP {status}: {body}"),
         });
     }
 
-    response.json::<T>().await.map_err(|err| ApiClientError {
+    if body.trim_start().starts_with('<') {
+        return Err(ApiClientError {
+            message: "API returned HTML instead of JSON — start the controller (`just run`) \
+                      or use `just ui` (port 5173) against an API on :8080"
+                .into(),
+        });
+    }
+
+    serde_json::from_str(&body).map_err(|err| ApiClientError {
         message: format!("invalid JSON: {err}"),
     })
 }
@@ -121,6 +146,16 @@ pub async fn get_inventory(
         format!("/api/v1/inventory?{}", params.join("&"))
     };
     get_json(&path).await
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamespaceItem {
+    pub name: String,
+}
+
+pub async fn list_namespaces() -> Result<Vec<NamespaceItem>, ApiClientError> {
+    get_json("/api/v1/namespaces").await
 }
 
 fn urlencoding_lite(value: &str) -> String {

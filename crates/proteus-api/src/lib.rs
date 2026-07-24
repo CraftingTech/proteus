@@ -6,6 +6,7 @@
 
 mod error;
 mod inventory;
+mod namespaces;
 mod resources;
 mod routes;
 mod state;
