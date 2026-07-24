@@ -1,3 +1,4 @@
+mod api;
 mod pages;
 mod shell;
 

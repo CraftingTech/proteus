@@ -151,6 +151,41 @@ a {
   color: var(--muted);
 }
 
+.meta {
+  margin-top: 0.85rem;
+  font-size: 0.85rem;
+}
+
+.banner {
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  background: #1b222c;
+}
+
+.banner.error {
+  border-color: #8a3b3b;
+  background: color-mix(in srgb, #3a1d1d 70%, var(--panel));
+}
+
+.banner strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.banner p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.page h2 {
+  margin: 1.5rem 0 0.65rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
