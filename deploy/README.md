@@ -42,3 +42,27 @@ This overwrites YAML under `deploy/kustomize/crds/` from `kube::CustomResourceEx
 ```bash
 just samples
 ```
+
+## S3-compatible credentials Secret
+
+`ProteusRepository` backends of `type: s3` reference a Secret via `credentialsSecretRef` in the same namespace. Expected key pairs (first match wins):
+
+| Access key | Secret key |
+| ---------- | ---------- |
+| `accessKeyId` | `secretAccessKey` |
+| `AWS_ACCESS_KEY_ID` | `AWS_SECRET_ACCESS_KEY` |
+| `access_key` | `secret_key` |
+
+Example:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-creds
+  namespace: proteus-system
+type: Opaque
+stringData:
+  accessKeyId: minio
+  secretAccessKey: minio123
+```

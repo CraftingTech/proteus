@@ -14,4 +14,7 @@ pub use chunking::{Chunk, Chunker, DEFAULT_CHUNK_SIZE};
 pub use crypto::{decrypt, encrypt, Ciphertext, EncryptionKey};
 pub use error::{CoreError, CoreResult};
 pub use hash::{hash_bytes, ContentId};
-pub use storage::{LocalBackend, ObjectStore, PutOptions, S3Backend, S3Config, StoredObject};
+pub use storage::{
+    credentials_from_secret_data, LocalBackend, ObjectStore, PutOptions, S3Backend, S3Config,
+    S3Credentials, StoredObject,
+};

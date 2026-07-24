@@ -27,6 +27,32 @@ impl LocalBackend {
         Ok(Self { root })
     }
 
+    /// Ensure `path` exists (or can be created) and is writable.
+    pub async fn probe(path: impl AsRef<Path>) -> CoreResult<()> {
+        let root = path.as_ref();
+        fs::create_dir_all(root)
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: root.to_path_buf(),
+                source,
+            })?;
+
+        let probe = root.join(".proteus-write-probe");
+        fs::write(&probe, b"ok")
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: probe.clone(),
+                source,
+            })?;
+        fs::remove_file(&probe)
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: probe,
+                source,
+            })?;
+        Ok(())
+    }
+
     fn object_path(&self, id: &ContentId) -> PathBuf {
         let hex = id.to_hex();
         let (prefix, _) = hex.split_at(2);
@@ -145,5 +171,18 @@ mod tests {
             .expect("put");
         let got = store.get(&id).await.expect("get");
         assert_eq!(got, data);
+    }
+
+    #[tokio::test]
+    async fn probe_accepts_writable_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        LocalBackend::probe(dir.path()).await.expect("probe");
+    }
+
+    #[tokio::test]
+    async fn probe_rejects_impossible_path() {
+        let path = PathBuf::from("/proc/proteus-no-such-dir/nested");
+        let err = LocalBackend::probe(&path).await.expect_err("should fail");
+        assert!(matches!(err, CoreError::LocalIo { .. }));
     }
 }
