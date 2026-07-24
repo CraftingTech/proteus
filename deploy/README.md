@@ -45,7 +45,9 @@ just samples
 
 ## S3-compatible credentials Secret
 
-`ProteusRepository` backends of `type: s3` reference a Secret via `credentialsSecretRef` in the same namespace. Expected key pairs (first match wins):
+From the Proteus UI you can paste Access Key + Secret Key directly; the API creates an Opaque Secret (`<repo>-s3-creds` by default) and sets `credentialsSecretRef`.
+
+Alternatively, create the Secret yourself and reference it. Expected key pairs (first match wins):
 
 | Access key | Secret key |
 | ---------- | ---------- |

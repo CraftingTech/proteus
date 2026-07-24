@@ -25,8 +25,12 @@ rules:
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["pods", "services", "secrets", "configmaps"]
+    resources: ["pods", "services", "configmaps"]
     verbs: ["get", "list", "watch"]
+  # Secrets: read for S3 probe; create/update for UI-provided credentials.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch"]

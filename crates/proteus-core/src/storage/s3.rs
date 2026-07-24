@@ -86,6 +86,39 @@ impl std::fmt::Debug for S3Backend {
     }
 }
 
+/// Rewrite a bucket-virtual-hosted URL to the regional API endpoint.
+///
+/// Users often paste `https://my-bucket.s3.fr-par.scw.cloud` instead of
+/// `https://s3.fr-par.scw.cloud`. With path-style + bucket name, that becomes
+/// `https://my-bucket.s3…/my-bucket` and Scaleway returns `NoSuchKey`.
+pub fn normalize_s3_endpoint(endpoint: &str, bucket: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    let (scheme, rest) = if let Some(r) = trimmed.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = trimmed.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        return trimmed.to_string();
+    };
+
+    let bucket = bucket.trim();
+    if bucket.is_empty() {
+        return trimmed.to_string();
+    }
+
+    let bucket_host_prefix = format!("{bucket}.");
+    let Some(after_bucket) = rest.strip_prefix(&bucket_host_prefix) else {
+        return trimmed.to_string();
+    };
+
+    // Drop a redundant `/{bucket}` path if present.
+    let after_bucket = after_bucket
+        .strip_suffix(&format!("/{bucket}"))
+        .unwrap_or(after_bucket);
+
+    format!("{scheme}://{after_bucket}")
+}
+
 impl S3Backend {
     pub fn new(config: S3Config, credentials: S3Credentials) -> CoreResult<Self> {
         let region = config
@@ -93,20 +126,32 @@ impl S3Backend {
             .clone()
             .unwrap_or_else(|| "us-east-1".to_string());
 
+        // Custom endpoints (MinIO, Scaleway, …) need path-style. Also rewrite
+        // accidental virtual-hosted bucket URLs pasted as "endpoint".
+        let endpoint = config
+            .endpoint
+            .as_deref()
+            .map(|ep| normalize_s3_endpoint(ep, &config.bucket));
+        let force_path_style = config.force_path_style || endpoint.is_some();
+
         let mut builder = AmazonS3Builder::new()
             .with_bucket_name(&config.bucket)
             .with_access_key_id(credentials.access_key_id.as_str())
             .with_secret_access_key(credentials.secret_access_key.as_str())
             .with_region(region)
-            .with_virtual_hosted_style_request(!config.force_path_style);
+            .with_virtual_hosted_style_request(!force_path_style);
 
-        if let Some(endpoint) = &config.endpoint {
+        if let Some(endpoint) = &endpoint {
             builder = builder.with_endpoint(endpoint);
         }
 
         let store: AmazonS3 = builder
             .build()
             .map_err(|err| CoreError::S3(format!("failed to build S3 client: {err}")))?;
+
+        let mut config = config;
+        config.endpoint = endpoint;
+        config.force_path_style = force_path_style;
 
         Ok(Self {
             config,
@@ -151,15 +196,13 @@ impl S3Backend {
 
     /// Best-effort reachability: list one object under the configured prefix.
     pub async fn probe(&self) -> CoreResult<()> {
-        let prefix = match &self.config.prefix {
-            Some(p) if !p.trim_matches('/').is_empty() => {
-                ObjectPath::from(format!("{}/", p.trim_matches('/')))
-            }
-            _ => ObjectPath::from(""),
-        };
+        let prefix = self.config.prefix.as_ref().and_then(|p| {
+            let trimmed = p.trim_matches('/');
+            (!trimmed.is_empty()).then(|| ObjectPath::from(format!("{trimmed}/")))
+        });
 
         self.store
-            .list(Some(&prefix))
+            .list(prefix.as_ref())
             .next()
             .await
             .transpose()
@@ -258,6 +301,22 @@ mod tests {
             },
             Arc::new(InMemory::new()),
         )
+    }
+
+    #[test]
+    fn normalize_strips_bucket_virtual_host() {
+        assert_eq!(
+            normalize_s3_endpoint("https://test-proteus.s3.fr-par.scw.cloud", "test-proteus"),
+            "https://s3.fr-par.scw.cloud"
+        );
+        assert_eq!(
+            normalize_s3_endpoint("https://s3.fr-par.scw.cloud", "test-proteus"),
+            "https://s3.fr-par.scw.cloud"
+        );
+        assert_eq!(
+            normalize_s3_endpoint("http://minio:9000", "backups"),
+            "http://minio:9000"
+        );
     }
 
     #[test]

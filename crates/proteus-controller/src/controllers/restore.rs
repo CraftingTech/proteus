@@ -31,14 +31,19 @@ pub async fn reconcile_restore(
             .status
             .as_ref()
             .and_then(|s| s.restored_snapshot_id.clone()),
-        progress_percent: Some(0),
-        completed_at: None,
+        progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent).or(Some(0)),
+        completed_at: obj.status.as_ref().and_then(|s| s.completed_at.clone()),
     };
 
-    let patch = serde_json::json!({ "status": status });
-    api.patch_status(&name, &PatchParams::default(), &Patch::Merge(&patch))
-        .await?;
-
+    let changed = match obj.status.as_ref() {
+        None => true,
+        Some(cur) => cur.phase != status.phase || cur.message != status.message,
+    };
+    if changed {
+        let patch = serde_json::json!({ "status": status });
+        api.patch_status(&name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await?;
+    }
     if let Err(err) = ctx.api_state.refresh_counts().await {
         tracing::warn!(error = %err, "failed to refresh cluster snapshot counts");
         ctx.api_state.mark_reconciled();

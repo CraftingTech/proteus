@@ -1,4 +1,5 @@
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
 use kube::{Api, ResourceExt};
 use proteus_crd::{
@@ -7,11 +8,14 @@ use proteus_crd::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::{object_namespace, ApiState};
 
 const DEFAULT_REPO_NAMESPACE: &str = "proteus-system";
+const MANAGED_SECRET_LABEL: &str = "proteus.io/managed-credentials";
+const MANAGED_SECRET_REPO_LABEL: &str = "proteus.io/repository";
 
 fn phase_label<T: Serialize>(phase: &T) -> Option<String> {
     match serde_json::to_value(phase) {
@@ -84,11 +88,32 @@ pub enum CreateRepositoryBackend {
         endpoint: Option<String>,
         #[serde(default)]
         region: Option<String>,
+        /// Existing Secret name, or desired name when creating from inline keys.
         #[serde(default, rename = "credentialsSecretRef")]
         credentials_secret_ref: Option<String>,
+        /// When set with `secretAccessKey`, Proteus creates/updates the Secret.
+        #[serde(default, rename = "accessKeyId")]
+        access_key_id: Option<String>,
+        #[serde(default, rename = "secretAccessKey")]
+        secret_access_key: Option<String>,
         #[serde(default)]
         force_path_style: Option<bool>,
     },
+}
+
+/// Inline S3 credentials to materialize as a Kubernetes Secret before/after CR create.
+#[derive(Clone, Debug)]
+pub struct InlineS3Credentials {
+    pub secret_name: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedRepository {
+    pub namespace: String,
+    pub repo: ProteusRepository,
+    pub inline_s3_credentials: Option<InlineS3Credentials>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -133,11 +158,59 @@ fn resolve_namespace(requested: Option<&str>) -> ApiResult<String> {
     }
 }
 
-pub fn backend_from_request(backend: &CreateRepositoryBackend) -> ApiResult<RepositoryBackend> {
+fn optional_trimmed(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Resolve S3 credentials: either an existing Secret ref, or inline keys to write.
+fn resolve_s3_credentials(
+    repo_name: &str,
+    credentials_secret_ref: Option<&str>,
+    access_key_id: Option<&str>,
+    secret_access_key: Option<&str>,
+) -> ApiResult<(String, Option<InlineS3Credentials>)> {
+    let access_key_id = optional_trimmed(access_key_id);
+    let secret_access_key = optional_trimmed(secret_access_key);
+    let credentials_secret_ref = optional_trimmed(credentials_secret_ref);
+
+    match (access_key_id, secret_access_key, credentials_secret_ref) {
+        (Some(access_key_id), Some(secret_access_key), secret_ref) => {
+            let secret_name =
+                secret_ref.unwrap_or_else(|| format!("{repo_name}-s3-creds"));
+            Ok((
+                secret_name.clone(),
+                Some(InlineS3Credentials {
+                    secret_name,
+                    access_key_id,
+                    secret_access_key,
+                }),
+            ))
+        }
+        (None, None, Some(secret_name)) => Ok((secret_name, None)),
+        (Some(_), None, _) | (None, Some(_), _) => Err(ApiError::BadRequest(
+            "backend.accessKeyId and backend.secretAccessKey must both be provided".to_string(),
+        )),
+        (None, None, None) => Err(ApiError::BadRequest(
+            "provide backend.accessKeyId + backend.secretAccessKey, or backend.credentialsSecretRef"
+                .to_string(),
+        )),
+    }
+}
+
+pub fn backend_from_request(
+    backend: &CreateRepositoryBackend,
+    repo_name: &str,
+) -> ApiResult<(RepositoryBackend, Option<InlineS3Credentials>)> {
     match backend {
         CreateRepositoryBackend::Local { path } => {
             let path = require_non_empty("backend.path", path.as_deref())?;
-            Ok(RepositoryBackend::Local(LocalBackendSpec { path }))
+            Ok((
+                RepositoryBackend::Local(LocalBackendSpec { path }),
+                None,
+            ))
         }
         CreateRepositoryBackend::S3 {
             bucket,
@@ -145,39 +218,37 @@ pub fn backend_from_request(backend: &CreateRepositoryBackend) -> ApiResult<Repo
             endpoint,
             region,
             credentials_secret_ref,
+            access_key_id,
+            secret_access_key,
             force_path_style,
         } => {
             let bucket = require_non_empty("backend.bucket", bucket.as_deref())?;
-            let credentials_secret_ref = require_non_empty(
-                "backend.credentialsSecretRef",
+            let (credentials_secret_ref, inline) = resolve_s3_credentials(
+                repo_name,
                 credentials_secret_ref.as_deref(),
+                access_key_id.as_deref(),
+                secret_access_key.as_deref(),
             )?;
-            Ok(RepositoryBackend::S3(S3BackendSpec {
-                bucket,
-                prefix: prefix
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-                endpoint: endpoint
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-                region: region
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-                credentials_secret_ref,
-                // Default true: MinIO and other S3-compatible endpoints need path-style.
-                force_path_style: force_path_style.unwrap_or(true),
-            }))
+            Ok((
+                RepositoryBackend::S3(S3BackendSpec {
+                    bucket,
+                    prefix: optional_trimmed(prefix.as_deref()),
+                    endpoint: optional_trimmed(endpoint.as_deref()),
+                    region: optional_trimmed(region.as_deref()),
+                    credentials_secret_ref,
+                    // Default true: MinIO and other S3-compatible endpoints need path-style.
+                    force_path_style: force_path_style.unwrap_or(true),
+                }),
+                inline,
+            ))
         }
     }
 }
 
-pub fn build_repository(req: &CreateRepositoryRequest) -> ApiResult<(String, ProteusRepository)> {
+pub fn build_repository(req: &CreateRepositoryRequest) -> ApiResult<PreparedRepository> {
     let name = require_non_empty("name", Some(req.name.as_str()))?;
     let namespace = resolve_namespace(req.namespace.as_deref())?;
-    let backend = backend_from_request(&req.backend)?;
+    let (backend, inline_s3_credentials) = backend_from_request(&req.backend, &name)?;
     let description = req
         .description
         .as_ref()
@@ -198,7 +269,89 @@ pub fn build_repository(req: &CreateRepositoryRequest) -> ApiResult<(String, Pro
         },
         status: None,
     };
-    Ok((namespace, repo))
+    Ok(PreparedRepository {
+        namespace,
+        repo,
+        inline_s3_credentials,
+    })
+}
+
+async fn upsert_s3_credentials_secret(
+    state: &ApiState,
+    namespace: &str,
+    creds: &InlineS3Credentials,
+    owner: Option<&ProteusRepository>,
+) -> ApiResult<()> {
+    let mut labels = BTreeMap::new();
+    labels.insert(MANAGED_SECRET_LABEL.to_string(), "true".to_string());
+    if let Some(repo) = owner {
+        labels.insert(
+            MANAGED_SECRET_REPO_LABEL.to_string(),
+            repo.name_any(),
+        );
+    }
+
+    let mut string_data = BTreeMap::new();
+    string_data.insert("accessKeyId".to_string(), creds.access_key_id.clone());
+    string_data.insert(
+        "secretAccessKey".to_string(),
+        creds.secret_access_key.clone(),
+    );
+
+    let owner_references = owner.and_then(|repo| {
+        let uid = repo.metadata.uid.as_ref()?;
+        Some(vec![OwnerReference {
+            api_version: "proteus.io/v1alpha1".to_string(),
+            kind: "ProteusRepository".to_string(),
+            name: repo.name_any(),
+            uid: uid.clone(),
+            controller: Some(true),
+            block_owner_deletion: Some(true),
+        }])
+    });
+
+    let secret = Secret {
+        metadata: ObjectMeta {
+            name: Some(creds.secret_name.clone()),
+            namespace: Some(namespace.to_string()),
+            labels: Some(labels),
+            owner_references,
+            ..ObjectMeta::default()
+        },
+        type_: Some("Opaque".to_string()),
+        string_data: Some(string_data),
+        ..Secret::default()
+    };
+
+    let api: Api<Secret> = Api::namespaced(state.client.clone(), namespace);
+    match api.create(&PostParams::default(), &secret).await {
+        Ok(_) => Ok(()),
+        Err(kube::Error::Api(err)) if err.code == 409 => {
+            // Replace credentials on conflict (UI re-submit / recreate).
+            let patch = serde_json::json!({
+                "metadata": {
+                    "labels": {
+                        MANAGED_SECRET_LABEL: "true",
+                        MANAGED_SECRET_REPO_LABEL: owner.map(|r| r.name_any()).unwrap_or_default(),
+                    },
+                    "ownerReferences": secret.metadata.owner_references,
+                },
+                "type": "Opaque",
+                "stringData": {
+                    "accessKeyId": creds.access_key_id,
+                    "secretAccessKey": creds.secret_access_key,
+                }
+            });
+            api.patch(
+                &creds.secret_name,
+                &PatchParams::apply("proteus-api").force(),
+                &Patch::Apply(&patch),
+            )
+            .await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub async fn list_repositories(state: &ApiState) -> ApiResult<Vec<RepositoryListItem>> {
@@ -221,9 +374,34 @@ pub async fn create_repository(
     state: &ApiState,
     req: CreateRepositoryRequest,
 ) -> ApiResult<RepositoryListItem> {
-    let (namespace, repo) = build_repository(&req)?;
+    let prepared = build_repository(&req)?;
+    let namespace = prepared.namespace.clone();
+
+    // Materialize credentials Secret before the CR so the first reconcile can probe.
+    if let Some(creds) = &prepared.inline_s3_credentials {
+        upsert_s3_credentials_secret(state, &namespace, creds, None).await?;
+    }
+
     let api: Api<ProteusRepository> = Api::namespaced(state.client.clone(), &namespace);
-    let created = api.create(&PostParams::default(), &repo).await?;
+    let created = match api.create(&PostParams::default(), &prepared.repo).await {
+        Ok(obj) => obj,
+        Err(err) => {
+            // Best-effort cleanup of a Secret we just created for this failed request.
+            if let Some(creds) = &prepared.inline_s3_credentials {
+                let secrets: Api<Secret> = Api::namespaced(state.client.clone(), &namespace);
+                let _ = secrets
+                    .delete(&creds.secret_name, &DeleteParams::default())
+                    .await;
+            }
+            return Err(err.into());
+        }
+    };
+
+    // Attach ownerReference so the Secret is GC'd with the repository.
+    if let Some(creds) = &prepared.inline_s3_credentials {
+        let _ = upsert_s3_credentials_secret(state, &namespace, creds, Some(&created)).await;
+    }
+
     let _ = state.refresh_counts().await;
     Ok(repository_list_item(&created))
 }
@@ -257,8 +435,10 @@ pub async fn patch_repository(
     if let Some(enabled) = req.encryption_enabled {
         spec.insert("encryptionEnabled".to_string(), Value::Bool(enabled));
     }
+    let mut inline_creds = None;
     if let Some(backend) = &req.backend {
-        let backend = backend_from_request(backend)?;
+        let (backend, inline) = backend_from_request(backend, name)?;
+        inline_creds = inline;
         spec.insert(
             "backend".to_string(),
             serde_json::to_value(backend)
@@ -273,6 +453,11 @@ pub async fn patch_repository(
     let updated = api
         .patch(name, &PatchParams::default(), &Patch::Merge(&body))
         .await?;
+
+    if let Some(creds) = inline_creds {
+        upsert_s3_credentials_secret(state, namespace, &creds, Some(&updated)).await?;
+    }
+
     Ok(repository_list_item(&updated))
 }
 
@@ -328,6 +513,25 @@ pub async fn list_restores(state: &ApiState) -> ApiResult<Vec<RestoreListItem>> 
 mod tests {
     use super::*;
 
+    fn s3_backend(
+        bucket: Option<&str>,
+        credentials_secret_ref: Option<&str>,
+        access_key_id: Option<&str>,
+        secret_access_key: Option<&str>,
+        force_path_style: Option<bool>,
+    ) -> CreateRepositoryBackend {
+        CreateRepositoryBackend::S3 {
+            bucket: bucket.map(str::to_string),
+            prefix: None,
+            endpoint: None,
+            region: None,
+            credentials_secret_ref: credentials_secret_ref.map(str::to_string),
+            access_key_id: access_key_id.map(str::to_string),
+            secret_access_key: secret_access_key.map(str::to_string),
+            force_path_style,
+        }
+    }
+
     #[test]
     fn rejects_missing_local_path() {
         let req = CreateRepositoryRequest {
@@ -348,37 +552,42 @@ mod tests {
             namespace: Some("proteus-system".into()),
             description: None,
             encryption_enabled: None,
-            backend: CreateRepositoryBackend::S3 {
-                bucket: Some("  ".into()),
-                prefix: None,
-                endpoint: None,
-                region: None,
-                credentials_secret_ref: Some("s3-creds".into()),
-                force_path_style: None,
-            },
+            backend: s3_backend(Some("  "), Some("s3-creds"), None, None, None),
         };
         let err = build_repository(&req).expect_err("bucket required");
         assert!(err.to_string().contains("backend.bucket"));
     }
 
     #[test]
-    fn rejects_missing_s3_credentials_secret_ref() {
+    fn rejects_missing_s3_credentials() {
         let req = CreateRepositoryRequest {
             name: "r1".into(),
             namespace: None,
             description: None,
             encryption_enabled: None,
-            backend: CreateRepositoryBackend::S3 {
-                bucket: Some("backups".into()),
-                prefix: None,
-                endpoint: Some("http://minio:9000".into()),
-                region: Some("us-east-1".into()),
-                credentials_secret_ref: None,
-                force_path_style: Some(true),
-            },
+            backend: s3_backend(
+                Some("backups"),
+                None,
+                None,
+                None,
+                Some(true),
+            ),
         };
-        let err = build_repository(&req).expect_err("secret required");
-        assert!(err.to_string().contains("backend.credentialsSecretRef"));
+        let err = build_repository(&req).expect_err("credentials required");
+        assert!(err.to_string().contains("accessKeyId"));
+    }
+
+    #[test]
+    fn rejects_partial_inline_s3_credentials() {
+        let req = CreateRepositoryRequest {
+            name: "r1".into(),
+            namespace: None,
+            description: None,
+            encryption_enabled: None,
+            backend: s3_backend(Some("backups"), None, Some("AKIA"), None, None),
+        };
+        let err = build_repository(&req).expect_err("both keys required");
+        assert!(err.to_string().contains("must both be provided"));
     }
 
     #[test]
@@ -392,19 +601,23 @@ mod tests {
                 path: Some("/var/lib/proteus/repo".into()),
             },
         };
-        let (ns, repo) = build_repository(&req).expect("valid");
-        assert_eq!(ns, "proteus-system");
-        assert_eq!(repo.metadata.name.as_deref(), Some("local-1"));
-        assert_eq!(repo.metadata.namespace.as_deref(), Some("proteus-system"));
-        assert!(repo.spec.encryption_enabled);
+        let prepared = build_repository(&req).expect("valid");
+        assert_eq!(prepared.namespace, "proteus-system");
+        assert_eq!(prepared.repo.metadata.name.as_deref(), Some("local-1"));
+        assert_eq!(
+            prepared.repo.metadata.namespace.as_deref(),
+            Some("proteus-system")
+        );
+        assert!(prepared.repo.spec.encryption_enabled);
+        assert!(prepared.inline_s3_credentials.is_none());
         assert!(matches!(
-            repo.spec.backend,
+            prepared.repo.spec.backend,
             RepositoryBackend::Local(ref local) if local.path == "/var/lib/proteus/repo"
         ));
     }
 
     #[test]
-    fn builds_s3_repo() {
+    fn builds_s3_repo_from_existing_secret_ref() {
         let req = CreateRepositoryRequest {
             name: "s3-1".into(),
             namespace: Some("demo".into()),
@@ -416,17 +629,45 @@ mod tests {
                 endpoint: Some("http://minio.local:9000".into()),
                 region: Some("us-east-1".into()),
                 credentials_secret_ref: Some("minio-creds".into()),
+                access_key_id: None,
+                secret_access_key: None,
                 force_path_style: Some(true),
             },
         };
-        let (ns, repo) = build_repository(&req).expect("valid");
-        assert_eq!(ns, "demo");
+        let prepared = build_repository(&req).expect("valid");
+        assert_eq!(prepared.namespace, "demo");
+        assert!(prepared.inline_s3_credentials.is_none());
         assert!(matches!(
-            repo.spec.backend,
+            prepared.repo.spec.backend,
             RepositoryBackend::S3(ref s3)
                 if s3.bucket == "proteus"
                     && s3.credentials_secret_ref == "minio-creds"
                     && s3.force_path_style
+        ));
+    }
+
+    #[test]
+    fn builds_s3_repo_from_inline_keys_with_default_secret_name() {
+        let req = CreateRepositoryRequest {
+            name: "scw-repo".into(),
+            namespace: Some("default".into()),
+            description: None,
+            encryption_enabled: None,
+            backend: s3_backend(
+                Some("my-bucket"),
+                None,
+                Some("SCWXXXX"),
+                Some("secret-value"),
+                Some(true),
+            ),
+        };
+        let prepared = build_repository(&req).expect("valid");
+        let inline = prepared.inline_s3_credentials.expect("inline creds");
+        assert_eq!(inline.secret_name, "scw-repo-s3-creds");
+        assert_eq!(inline.access_key_id, "SCWXXXX");
+        assert!(matches!(
+            prepared.repo.spec.backend,
+            RepositoryBackend::S3(ref s3) if s3.credentials_secret_ref == "scw-repo-s3-creds"
         ));
     }
 
@@ -437,18 +678,11 @@ mod tests {
             namespace: None,
             description: None,
             encryption_enabled: None,
-            backend: CreateRepositoryBackend::S3 {
-                bucket: Some("proteus".into()),
-                prefix: None,
-                endpoint: Some("http://minio:9000".into()),
-                region: None,
-                credentials_secret_ref: Some("minio-creds".into()),
-                force_path_style: None,
-            },
+            backend: s3_backend(Some("proteus"), Some("minio-creds"), None, None, None),
         };
-        let (_, repo) = build_repository(&req).expect("valid");
+        let prepared = build_repository(&req).expect("valid");
         assert!(matches!(
-            repo.spec.backend,
+            prepared.repo.spec.backend,
             RepositoryBackend::S3(ref s3) if s3.force_path_style
         ));
     }
@@ -460,18 +694,17 @@ mod tests {
             namespace: None,
             description: None,
             encryption_enabled: None,
-            backend: CreateRepositoryBackend::S3 {
-                bucket: Some("proteus".into()),
-                prefix: None,
-                endpoint: None,
-                region: Some("eu-west-1".into()),
-                credentials_secret_ref: Some("aws-creds".into()),
-                force_path_style: Some(false),
-            },
+            backend: s3_backend(
+                Some("proteus"),
+                Some("aws-creds"),
+                None,
+                None,
+                Some(false),
+            ),
         };
-        let (_, repo) = build_repository(&req).expect("valid");
+        let prepared = build_repository(&req).expect("valid");
         assert!(matches!(
-            repo.spec.backend,
+            prepared.repo.spec.backend,
             RepositoryBackend::S3(ref s3) if !s3.force_path_style
         ));
     }

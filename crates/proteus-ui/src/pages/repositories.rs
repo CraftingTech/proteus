@@ -20,13 +20,15 @@ pub fn Repositories() -> Element {
     let mut show_form = use_signal(|| false);
     let mut backend_kind = use_signal(|| BackendKind::Local);
     let mut name = use_signal(String::new);
-    let mut namespace = use_signal(|| "proteus-system".to_string());
+    let mut namespace = use_signal(|| "default".to_string());
     let mut description = use_signal(String::new);
-    let mut local_path = use_signal(|| "/var/lib/proteus/repo".to_string());
+    let mut local_path = use_signal(|| "~/tmp/proteus/repo".to_string());
     let mut bucket = use_signal(String::new);
     let mut endpoint = use_signal(String::new);
-    let mut region = use_signal(|| "us-east-1".to_string());
+    let mut region = use_signal(|| "fr-par".to_string());
     let mut prefix = use_signal(String::new);
+    let mut access_key_id = use_signal(String::new);
+    let mut secret_access_key = use_signal(String::new);
     let mut credentials_secret_ref = use_signal(String::new);
     let mut force_path_style = use_signal(|| true);
     let mut form_error = use_signal(|| Option::<String>::None);
@@ -40,10 +42,17 @@ pub fn Repositories() -> Element {
             let mut names: Vec<String> = items.iter().map(|n| n.name.clone()).collect();
             names.sort();
             names.dedup();
-            if !names.iter().any(|n| n == "proteus-system") {
-                names.insert(0, "proteus-system".to_string());
+            namespace_options.set(names.clone());
+            // Prefer an existing namespace; never invent ones that don't exist on the cluster.
+            if !names.iter().any(|n| n == &namespace()) {
+                let fallback = names
+                    .iter()
+                    .find(|n| *n == "default")
+                    .cloned()
+                    .or_else(|| names.first().cloned())
+                    .unwrap_or_else(|| "default".into());
+                namespace.set(fallback);
             }
-            namespace_options.set(names);
         }
     });
 
@@ -98,13 +107,25 @@ pub fn Repositories() -> Element {
             }
             BackendKind::S3 => {
                 let bucket = bucket().trim().to_string();
-                let secret = credentials_secret_ref().trim().to_string();
+                let access_key = access_key_id().trim().to_string();
+                let secret_key = secret_access_key().trim().to_string();
+                let secret_ref = credentials_secret_ref().trim().to_string();
                 if bucket.is_empty() {
                     form_error.set(Some("backend.bucket is required".into()));
                     return;
                 }
-                if secret.is_empty() {
-                    form_error.set(Some("backend.credentialsSecretRef is required".into()));
+                let has_inline = !access_key.is_empty() || !secret_key.is_empty();
+                if has_inline {
+                    if access_key.is_empty() || secret_key.is_empty() {
+                        form_error.set(Some(
+                            "Access Key and Secret Key are both required".into(),
+                        ));
+                        return;
+                    }
+                } else if secret_ref.is_empty() {
+                    form_error.set(Some(
+                        "Enter Access Key + Secret Key (or an existing Secret name)".into(),
+                    ));
                     return;
                 }
                 let endpoint = endpoint().trim().to_string();
@@ -115,7 +136,9 @@ pub fn Repositories() -> Element {
                     prefix: (!prefix.is_empty()).then_some(prefix),
                     endpoint: (!endpoint.is_empty()).then_some(endpoint),
                     region: (!region.is_empty()).then_some(region),
-                    credentials_secret_ref: secret,
+                    credentials_secret_ref: (!secret_ref.is_empty()).then_some(secret_ref),
+                    access_key_id: (!access_key.is_empty()).then_some(access_key),
+                    secret_access_key: (!secret_key.is_empty()).then_some(secret_key),
                     force_path_style: force_path_style(),
                 }
             }
@@ -136,6 +159,9 @@ pub fn Repositories() -> Element {
                 Ok(_) => {
                     name.set(String::new());
                     description.set(String::new());
+                    access_key_id.set(String::new());
+                    secret_access_key.set(String::new());
+                    credentials_secret_ref.set(String::new());
                     show_form.set(false);
                     form_busy.set(false);
                     refresh_tick.set(refresh_tick() + 1);
@@ -237,8 +263,11 @@ pub fn Repositories() -> Element {
                                 input {
                                     r#type: "text",
                                     value: "{local_path}",
-                                    placeholder: "/var/lib/proteus/repo",
+                                    placeholder: "~/tmp/proteus/repo",
                                     oninput: move |evt| local_path.set(evt.value()),
+                                }
+                                span { class: "field-hint muted",
+                                    "~ is expanded; the directory is created if missing (on the machine running the controller)."
                                 }
                             }
                         } else {
@@ -247,25 +276,20 @@ pub fn Repositories() -> Element {
                                 input {
                                     r#type: "text",
                                     value: "{bucket}",
+                                    placeholder: "my-bucket",
                                     oninput: move |evt| bucket.set(evt.value()),
                                 }
                             }
-                            label {
-                                span { "Credentials Secret ref" }
-                                input {
-                                    r#type: "text",
-                                    value: "{credentials_secret_ref}",
-                                    placeholder: "minio-creds",
-                                    oninput: move |evt| credentials_secret_ref.set(evt.value()),
-                                }
-                            }
-                            label {
+                            label { class: "form-span-2",
                                 span { "Endpoint" }
                                 input {
                                     r#type: "text",
                                     value: "{endpoint}",
-                                    placeholder: "http://minio:9000",
+                                    placeholder: "https://s3.fr-par.scw.cloud",
                                     oninput: move |evt| endpoint.set(evt.value()),
+                                }
+                                span { class: "field-hint muted",
+                                    "Regional API only — e.g. https://s3.fr-par.scw.cloud (not https://BUCKET.s3.fr-par.scw.cloud)."
                                 }
                             }
                             label {
@@ -273,6 +297,7 @@ pub fn Repositories() -> Element {
                                 input {
                                     r#type: "text",
                                     value: "{region}",
+                                    placeholder: "fr-par",
                                     oninput: move |evt| region.set(evt.value()),
                                 }
                             }
@@ -284,13 +309,44 @@ pub fn Repositories() -> Element {
                                     oninput: move |evt| prefix.set(evt.value()),
                                 }
                             }
+                            label {
+                                span { "Access Key" }
+                                input {
+                                    r#type: "text",
+                                    autocomplete: "off",
+                                    value: "{access_key_id}",
+                                    placeholder: "SCW…",
+                                    oninput: move |evt| access_key_id.set(evt.value()),
+                                }
+                            }
+                            label {
+                                span { "Secret Key" }
+                                input {
+                                    r#type: "password",
+                                    autocomplete: "new-password",
+                                    value: "{secret_access_key}",
+                                    oninput: move |evt| secret_access_key.set(evt.value()),
+                                }
+                            }
+                            label { class: "form-span-2",
+                                span { "Existing Secret name (optional)" }
+                                input {
+                                    r#type: "text",
+                                    value: "{credentials_secret_ref}",
+                                    placeholder: "leave empty to create <name>-s3-creds",
+                                    oninput: move |evt| credentials_secret_ref.set(evt.value()),
+                                }
+                                span { class: "field-hint muted",
+                                    "Paste Access Key + Secret Key above — Proteus creates the Kubernetes Secret for you. Or leave keys empty and point to an existing Secret."
+                                }
+                            }
                             label { class: "checkbox",
                                 input {
                                     r#type: "checkbox",
                                     checked: force_path_style(),
                                     onchange: move |evt| force_path_style.set(evt.checked()),
                                 }
-                                " Force path-style (MinIO)"
+                                " Force path-style (S3-compatible / Scaleway / MinIO)"
                             }
                         }
                     }

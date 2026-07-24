@@ -15,6 +15,6 @@ pub use crypto::{decrypt, encrypt, Ciphertext, EncryptionKey};
 pub use error::{CoreError, CoreResult};
 pub use hash::{hash_bytes, ContentId};
 pub use storage::{
-    credentials_from_secret_data, LocalBackend, ObjectStore, PutOptions, S3Backend, S3Config,
-    S3Credentials, StoredObject,
+    credentials_from_secret_data, expand_local_path, normalize_s3_endpoint, LocalBackend,
+    ObjectStore, PutOptions, S3Backend, S3Config, S3Credentials, StoredObject,
 };

@@ -45,8 +45,16 @@ pub enum CreateRepositoryBackend {
         endpoint: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         region: Option<String>,
-        #[serde(rename = "credentialsSecretRef")]
-        credentials_secret_ref: String,
+        /// Optional: use an existing Secret instead of pasting keys.
+        #[serde(
+            rename = "credentialsSecretRef",
+            skip_serializing_if = "Option::is_none"
+        )]
+        credentials_secret_ref: Option<String>,
+        #[serde(rename = "accessKeyId", skip_serializing_if = "Option::is_none")]
+        access_key_id: Option<String>,
+        #[serde(rename = "secretAccessKey", skip_serializing_if = "Option::is_none")]
+        secret_access_key: Option<String>,
         #[serde(rename = "forcePathStyle")]
         force_path_style: bool,
     },
