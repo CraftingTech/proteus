@@ -1,0 +1,37 @@
+# Sample manifests (not installed by default)
+
+apiVersion: proteus.io/v1alpha1
+kind: ProteusRepository
+metadata:
+  name: local-repo
+  namespace: proteus-system
+spec:
+  description: Local CAS store for development
+  encryptionEnabled: false
+  backend:
+    type: local
+    path: /var/lib/proteus/repo
+---
+apiVersion: proteus.io/v1alpha1
+kind: ProteusBackup
+metadata:
+  name: demo-ns-daily
+  namespace: proteus-system
+spec:
+  repositoryRef: local-repo
+  targetNamespace: demo
+  schedule: "0 2 * * *"
+  includeVolumes: true
+  retention:
+    keepLast: 7
+    maxAgeDays: 30
+---
+apiVersion: proteus.io/v1alpha1
+kind: ProteusRestore
+metadata:
+  name: demo-ns-restore
+  namespace: proteus-system
+spec:
+  backupRef: demo-ns-daily
+  targetNamespace: demo-restored
+  overwrite: false

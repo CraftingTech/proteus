@@ -1,0 +1,8 @@
+[application]
+name = "proteus-ui"
+out_dir = "dist"
+asset_dir = "assets"
+
+[web.app]
+title = "Proteus"
+index_on_404 = true

@@ -1,0 +1,32 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: proteus-controller
+rules:
+  - apiGroups: ["proteus.io"]
+    resources:
+      - proteusrepositories
+      - proteusbackups
+      - proteusrestores
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["proteus.io"]
+    resources:
+      - proteusrepositories/status
+      - proteusbackups/status
+      - proteusrestores/status
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]

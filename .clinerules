@@ -1,0 +1,10 @@
+# Proteus — Cline / AI coding conventions
+
+1. Crates: `proteus-core`, `proteus-crd`, `proteus-api`, `proteus-controller`, `proteus-ui` + `deploy/`.
+2. 100% Rust including UI (Dioxus WASM) — no Node/React.
+3. Craft: Clean Code / Fowler / GoF — names > comments.
+4. Errors: `thiserror` in libs, `anyhow` at binary edges; zero unwrap/expect/panic in prod.
+5. Async-first with `tokio`.
+6. CRDs `proteus.io/v1alpha1`: Repository, Backup, Restore.
+7. MVP: UI required, PVC-centric, single cluster; ship via Docker + Kustomize.
+8. fmt + clippy `-D warnings` (exclude `proteus-ui` from host clippy; build UI with `dx`).

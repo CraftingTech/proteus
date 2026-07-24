@@ -1,0 +1,27 @@
+[package]
+name = "proteus-core"
+description = "Content-addressable storage engine for Proteus (chunking, BLAKE3, AES-256-GCM)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+blake3 = { workspace = true }
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3.14"

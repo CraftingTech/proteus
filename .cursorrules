@@ -1,0 +1,43 @@
+# Proteus — Cursor / AI coding conventions
+
+You are working in **Proteus**, a lightweight Kube-native backup & disaster-recovery system written in Rust.
+
+## Architecture
+
+- Cargo workspace under `crates/` + install under `deploy/`:
+  - `proteus-core` — CAS engine
+  - `proteus-crd` — CRD types (`kube-derive`)
+  - `proteus-api` — Axum API + embedded UI assets
+  - `proteus-controller` — Kubernetes operator
+  - `proteus-ui` — Dioxus WASM control plane
+  - `deploy/` — Dockerfile + Kustomize
+- Target: Kubernetes **1.26+** (single cluster for MVP), Rust edition **2021**, async-first with **Tokio**.
+- MVP: embedded UI, PVC-centric backups, single cluster; install via image and/or Kustomize.
+- **100% Rust** including UI (Dioxus WASM). No Node/React/Vite application code.
+
+## Craft (Clean Code / Fowler / GoF)
+
+- Express intent in **names and structure**, not comments.
+- Comments only for non-obvious **why** (trade-offs, invariants, external constraints).
+- Do **not** add `///` on every item. No `#![deny(missing_docs)]`.
+- Prefer small modules and clear types (SRP). Apply GoF patterns only when they remove real duplication or branching pain.
+- Boy Scout rule on every touch.
+
+## Error handling
+
+- Libs: `thiserror`. Binary edge: `anyhow` OK.
+- Never `unwrap` / `expect` / `panic!` in production paths.
+
+## Async
+
+- Tokio for I/O. Do not block the runtime.
+
+## Kubernetes / CRDs
+
+- Group `proteus.io`, version `v1alpha1`. Kinds: Repository, Backup, Restore.
+- Reconcile idempotently; typed status updates.
+
+## Style
+
+- `cargo fmt` + `cargo clippy --workspace --all-targets --exclude proteus-ui -- -D warnings` before merge.
+- Prefer composable modules over god files.

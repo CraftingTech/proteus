@@ -1,0 +1,16 @@
+[package]
+name = "proteus-ui"
+description = "Proteus operator UI (Dioxus WASM)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+dioxus = { version = "0.7", features = ["web", "router"] }
+
+[features]
+default = ["web"]
+web = []

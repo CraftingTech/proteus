@@ -1,0 +1,114 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: proteusrepositories.proteus.io
+spec:
+  group: proteus.io
+  names:
+    categories: []
+    kind: ProteusRepository
+    plural: proteusrepositories
+    shortNames:
+    - prepo
+    singular: proteusrepository
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.backend.type
+      name: Backend
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for ProteusRepositorySpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              backend:
+                oneOf:
+                - required:
+                  - bucket
+                  - credentialsSecretRef
+                  - type
+                - required:
+                  - path
+                  - type
+                properties:
+                  bucket:
+                    type: string
+                  credentialsSecretRef:
+                    type: string
+                  endpoint:
+                    type: string
+                  forcePathStyle:
+                    type: boolean
+                  path:
+                    type: string
+                  prefix:
+                    type: string
+                  region:
+                    type: string
+                  type:
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: backend.type must be s3 or local
+                  rule: self.type in ['s3', 'local']
+                - message: s3 backend requires bucket and credentialsSecretRef
+                  rule: self.type != 's3' || (has(self.bucket) && has(self.credentialsSecretRef))
+                - message: local backend requires path
+                  rule: self.type != 'local' || has(self.path)
+              description:
+                nullable: true
+                type: string
+              encryptionEnabled:
+                default: false
+                type: boolean
+              encryptionSecretRef:
+                nullable: true
+                type: string
+            required:
+            - backend
+            type: object
+          status:
+            nullable: true
+            properties:
+              bytesStored:
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
+              lastCheckedAt:
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              objectCount:
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
+              phase:
+                enum:
+                - Pending
+                - Ready
+                - Failed
+                - Terminating
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: ProteusRepository
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

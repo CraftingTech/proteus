@@ -1,0 +1,24 @@
+[package]
+name = "proteus-crd"
+description = "Kubernetes Custom Resource Definitions for Proteus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+kube = { workspace = true, features = ["derive"] }
+k8s-openapi = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+serde_yaml = { workspace = true }
+
+[[bin]]
+name = "proteus-crdgen"
+path = "src/bin/proteus-crdgen.rs"
+
+[dev-dependencies]

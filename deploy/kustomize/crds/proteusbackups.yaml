@@ -1,0 +1,115 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: proteusbackups.proteus.io
+spec:
+  group: proteus.io
+  names:
+    categories: []
+    kind: ProteusBackup
+    plural: proteusbackups
+    shortNames:
+    - pbackup
+    singular: proteusbackup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.repositoryRef
+      name: Repository
+      type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for ProteusBackupSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              includeClusterResources:
+                default: false
+                type: boolean
+              includeVolumes:
+                default: true
+                type: boolean
+              labelSelector:
+                nullable: true
+                type: string
+              repositoryNamespace:
+                nullable: true
+                type: string
+              repositoryRef:
+                type: string
+              retention:
+                default:
+                  keepLast: 7
+                properties:
+                  keepLast:
+                    default: 7
+                    format: uint32
+                    minimum: 0.0
+                    type: integer
+                  maxAgeDays:
+                    format: uint32
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                type: object
+              schedule:
+                nullable: true
+                type: string
+              targetNamespace:
+                type: string
+            required:
+            - repositoryRef
+            - targetNamespace
+            type: object
+          status:
+            nullable: true
+            properties:
+              lastBytes:
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
+              lastFailureAt:
+                nullable: true
+                type: string
+              lastSnapshotId:
+                nullable: true
+                type: string
+              lastSuccessAt:
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              phase:
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                nullable: true
+                type: string
+              retainedSnapshots:
+                format: uint32
+                minimum: 0.0
+                nullable: true
+                type: integer
+            type: object
+        required:
+        - spec
+        title: ProteusBackup
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

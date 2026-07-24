@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/proteus-core",
+    "crates/proteus-crd",
+    "crates/proteus-api",
+    "crates/proteus-controller",
+    "crates/proteus-ui",
+]
+default-members = [
+    "crates/proteus-controller",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "Apache-2.0"
+repository = "https://github.com/CraftingTech/proteus"
+homepage = "https://github.com/CraftingTech/proteus"
+authors = ["CraftingTech <hello@crafting.tech>"]
+description = "Kube-native backup and disaster recovery with content-addressable storage"
+keywords = ["kubernetes", "backup", "disaster-recovery", "operator", "cas"]
+categories = ["command-line-utilities", "network-programming"]
+
+[workspace.dependencies]
+# Internal crates
+proteus-core = { path = "crates/proteus-core" }
+proteus-crd = { path = "crates/proteus-crd" }
+proteus-api = { path = "crates/proteus-api" }
+
+# Async runtime
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "signal", "fs", "io-util", "sync", "time"] }
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1.9"
+
+# Kubernetes
+kube = { version = "0.98", default-features = false, features = ["client", "runtime", "derive", "rustls-tls"] }
+k8s-openapi = { version = "0.24", default-features = false, features = ["v1_30"] }
+schemars = "0.8"
+
+# HTTP / API
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+http = "1.2"
+rust-embed = { version = "8.5", features = ["mime-guess", "interpolate-folder-path"] }
+mime_guess = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Crypto / hashing / compression
+blake3 = "1.5"
+aes-gcm = "0.10"
+rand = "0.8"
+zeroize = { version = "1.8", features = ["derive"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Utilities
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+parking_lot = "0.12"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.dev]
+debug = 1

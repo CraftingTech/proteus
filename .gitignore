@@ -1,0 +1,33 @@
+# Dioxus UI build output
+crates/proteus-ui/dist/
+
+# Rust
+/target/
+**/target/
+**/*.rs.bk
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# AIDD / local docs scratch
+aidd_docs/.cache/
+
+# Test / coverage
+coverage/
+lcov.info
+*.profraw
+*.profdata
+
+# Generated CRD YAML (optional local export)
+/deploy/crds/*.generated.yaml

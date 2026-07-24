@@ -1,0 +1,8 @@
+# Production-hardening defaults for Proteus.
+# unwrap/expect are denied via crate `#![deny(clippy::unwrap_used)]` etc.
+# `allow-*-in-tests` applies to those lints (not to disallowed_methods).
+msrv = "1.78.0"
+avoid-breaking-exported-api = true
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-dbg-in-tests = true
