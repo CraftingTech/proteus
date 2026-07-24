@@ -24,10 +24,19 @@ pub struct S3Config {
     pub force_path_style: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct S3Credentials {
     pub access_key_id: Zeroizing<String>,
     pub secret_access_key: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for S3Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Credentials")
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"***")
+            .finish()
+    }
 }
 
 /// Resolve S3 access keys from a Kubernetes Secret data map (decoded strings).
@@ -259,6 +268,18 @@ mod tests {
         let creds = credentials_from_secret_data(&data).expect("parse");
         assert_eq!(creds.access_key_id.as_str(), "AKIA");
         assert_eq!(creds.secret_access_key.as_str(), "secret");
+    }
+
+    #[test]
+    fn credentials_debug_redacts_secret() {
+        let creds = S3Credentials {
+            access_key_id: Zeroizing::new("AKIA".into()),
+            secret_access_key: Zeroizing::new("super-secret".into()),
+        };
+        let dbg = format!("{creds:?}");
+        assert!(dbg.contains("AKIA"));
+        assert!(dbg.contains("***"));
+        assert!(!dbg.contains("super-secret"));
     }
 
     #[test]

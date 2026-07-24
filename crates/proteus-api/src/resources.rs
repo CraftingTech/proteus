@@ -167,7 +167,8 @@ pub fn backend_from_request(backend: &CreateRepositoryBackend) -> ApiResult<Repo
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty()),
                 credentials_secret_ref,
-                force_path_style: force_path_style.unwrap_or(false),
+                // Default true: MinIO and other S3-compatible endpoints need path-style.
+                force_path_style: force_path_style.unwrap_or(true),
             }))
         }
     }
@@ -426,6 +427,52 @@ mod tests {
                 if s3.bucket == "proteus"
                     && s3.credentials_secret_ref == "minio-creds"
                     && s3.force_path_style
+        ));
+    }
+
+    #[test]
+    fn s3_force_path_style_defaults_true_when_omitted() {
+        let req = CreateRepositoryRequest {
+            name: "s3-default".into(),
+            namespace: None,
+            description: None,
+            encryption_enabled: None,
+            backend: CreateRepositoryBackend::S3 {
+                bucket: Some("proteus".into()),
+                prefix: None,
+                endpoint: Some("http://minio:9000".into()),
+                region: None,
+                credentials_secret_ref: Some("minio-creds".into()),
+                force_path_style: None,
+            },
+        };
+        let (_, repo) = build_repository(&req).expect("valid");
+        assert!(matches!(
+            repo.spec.backend,
+            RepositoryBackend::S3(ref s3) if s3.force_path_style
+        ));
+    }
+
+    #[test]
+    fn s3_force_path_style_false_when_explicit() {
+        let req = CreateRepositoryRequest {
+            name: "s3-aws".into(),
+            namespace: None,
+            description: None,
+            encryption_enabled: None,
+            backend: CreateRepositoryBackend::S3 {
+                bucket: Some("proteus".into()),
+                prefix: None,
+                endpoint: None,
+                region: Some("eu-west-1".into()),
+                credentials_secret_ref: Some("aws-creds".into()),
+                force_path_style: Some(false),
+            },
+        };
+        let (_, repo) = build_repository(&req).expect("valid");
+        assert!(matches!(
+            repo.spec.backend,
+            RepositoryBackend::S3(ref s3) if !s3.force_path_style
         ));
     }
 }

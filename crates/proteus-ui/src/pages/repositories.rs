@@ -52,6 +52,23 @@ pub fn Repositories() -> Element {
         async move { api::list_repositories().await }
     });
 
+    // Poll while any row is still reconciling (missing / Pending phase).
+    use_effect(move || {
+        let needs_poll = match &*rows.read_unchecked() {
+            Some(Ok(items)) => items
+                .iter()
+                .any(|item| matches!(item.phase.as_deref(), None | Some("Pending"))),
+            _ => false,
+        };
+        if !needs_poll {
+            return;
+        }
+        spawn(async move {
+            gloo_timers::future::TimeoutFuture::new(7_000).await;
+            refresh_tick.set(refresh_tick() + 1);
+        });
+    });
+
     let on_create = move |_| {
         if form_busy() {
             return;
@@ -147,6 +164,12 @@ pub fn Repositories() -> Element {
                         form_error.set(None);
                     },
                     if show_form() { "Cancel" } else { "+ New repository" }
+                }
+                button {
+                    class: "btn",
+                    r#type: "button",
+                    onclick: move |_| refresh_tick.set(refresh_tick() + 1),
+                    "Refresh"
                 }
             }
 
