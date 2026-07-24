@@ -81,6 +81,12 @@ spec:
           status:
             nullable: true
             properties:
+              durationSeconds:
+                description: Wall-clock duration of a successful run, in seconds.
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
               lastBytes:
                 format: uint64
                 minimum: 0.0
@@ -106,8 +112,24 @@ spec:
                 - Failed
                 nullable: true
                 type: string
+              progressPercent:
+                description: 0–100 while `phase` is Running; 100 on Succeeded.
+                format: uint8
+                minimum: 0.0
+                nullable: true
+                type: integer
               retainedSnapshots:
                 format: uint32
+                minimum: 0.0
+                nullable: true
+                type: integer
+              startedAt:
+                description: When the current/last run started (RFC3339).
+                nullable: true
+                type: string
+              throughputBytesPerSec:
+                description: Approximate throughput of a successful run (`lastBytes / durationSeconds`).
+                format: uint64
                 minimum: 0.0
                 nullable: true
                 type: integer

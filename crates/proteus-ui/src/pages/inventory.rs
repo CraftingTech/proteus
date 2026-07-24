@@ -69,9 +69,8 @@ pub fn Inventory() -> Element {
 
     rsx! {
         section { class: "page",
-            h1 { "Inventory" }
-            p { class: "lede",
-                "Cluster objects Proteus can see — metadata only. Secrets never expose values."
+            div { class: "page-header",
+                h1 { "Inventory" }
             }
 
             div { class: "panel filters",

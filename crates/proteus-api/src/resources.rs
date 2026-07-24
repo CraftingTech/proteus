@@ -1,15 +1,22 @@
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use k8s_openapi::ByteString;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
 use kube::{Api, ResourceExt};
+use proteus_core::{
+    backup::gc_unreferenced, credentials_from_secret_data, LocalBackend, ObjectStore, S3Backend,
+    S3Config,
+};
 use proteus_crd::{
     LocalBackendSpec, ProteusBackup, ProteusBackupSpec, ProteusRepository, ProteusRepositorySpec,
-    ProteusRestore, RepositoryBackend, RetentionPolicy, S3BackendSpec,
+    ProteusRestore, ProteusRestoreSpec, RepositoryBackend, RetentionPolicy, S3BackendSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use tracing::warn;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::{object_namespace, ApiState};
@@ -47,6 +54,12 @@ pub struct BackupListItem {
     pub phase: Option<String>,
     pub message: Option<String>,
     pub last_snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throughput_bytes_per_sec: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,6 +71,7 @@ pub struct RestoreListItem {
     pub target_namespace: String,
     pub phase: Option<String>,
     pub message: Option<String>,
+    pub restored_snapshot_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -655,6 +669,9 @@ fn backup_list_item(obj: &ProteusBackup) -> BackupListItem {
             .and_then(|s| s.phase.as_ref().and_then(phase_label)),
         message: obj.status.as_ref().and_then(|s| s.message.clone()),
         last_snapshot_id: obj.status.as_ref().and_then(|s| s.last_snapshot_id.clone()),
+        progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
+        duration_seconds: obj.status.as_ref().and_then(|s| s.duration_seconds),
+        throughput_bytes_per_sec: obj.status.as_ref().and_then(|s| s.throughput_bytes_per_sec),
     }
 }
 
@@ -734,29 +751,248 @@ pub async fn create_backup(
 
 pub async fn delete_backup(state: &ApiState, namespace: &str, name: &str) -> ApiResult<()> {
     let api: Api<ProteusBackup> = Api::namespaced(state.client.clone(), namespace);
+    let backup = api.get(name).await?;
+
+    let repo_ns = backup
+        .spec
+        .repository_namespace
+        .as_deref()
+        .unwrap_or(namespace)
+        .to_string();
+    let repo_ref = backup.spec.repository_ref.clone();
+
+    // GC first: drop this backup's snapshot + orphans; keep other backups' objects.
+    match gc_repository_after_backup_delete(state, namespace, name, &repo_ns, &repo_ref).await {
+        Ok(removed) => {
+            if removed > 0 {
+                tracing::info!(
+                    backup = %name,
+                    repository = %repo_ref,
+                    removed,
+                    "purged unreferenced objects from repository"
+                );
+            }
+        }
+        Err(err) => {
+            warn!(
+                backup = %name,
+                error = %err,
+                "failed to purge repository objects; leaving CR in place"
+            );
+            return Err(ApiError::Internal(format!(
+                "could not remove backup data from repository: {err}"
+            )));
+        }
+    }
+
     api.delete(name, &DeleteParams::default()).await?;
     let _ = state.refresh_counts().await;
     Ok(())
 }
 
+/// Keep snapshots belonging to other backups that share the same repository; delete the rest.
+async fn gc_repository_after_backup_delete(
+    state: &ApiState,
+    deleting_namespace: &str,
+    deleting_name: &str,
+    repo_namespace: &str,
+    repo_ref: &str,
+) -> Result<u64, String> {
+    let all: Api<ProteusBackup> = Api::all(state.client.clone());
+    let list = all
+        .list(&ListParams::default())
+        .await
+        .map_err(|err| format!("failed to list backups for GC: {err}"))?;
+
+    let mut keep_snapshots = Vec::new();
+    for other in &list.items {
+        let other_ns = object_namespace(other);
+        let other_name = other.name_any();
+        if other_ns == deleting_namespace && other_name == deleting_name {
+            continue;
+        }
+        let other_repo_ns = other
+            .spec
+            .repository_namespace
+            .as_deref()
+            .unwrap_or(other_ns.as_str());
+        if other.spec.repository_ref != repo_ref || other_repo_ns != repo_namespace {
+            continue;
+        }
+        if let Some(id) = other
+            .status
+            .as_ref()
+            .and_then(|s| s.last_snapshot_id.as_ref())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            keep_snapshots.push(id);
+        }
+    }
+
+    let store = open_repository_store(state, repo_namespace, repo_ref).await?;
+    gc_unreferenced(store.as_ref(), &keep_snapshots)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+async fn open_repository_store(
+    state: &ApiState,
+    namespace: &str,
+    repo_ref: &str,
+) -> Result<Arc<dyn ObjectStore>, String> {
+    let api: Api<ProteusRepository> = Api::namespaced(state.client.clone(), namespace);
+    let repo = api
+        .get(repo_ref)
+        .await
+        .map_err(|err| format!("repository '{repo_ref}' not found in '{namespace}': {err}"))?;
+
+    match &repo.spec.backend {
+        RepositoryBackend::Local(local) => {
+            let backend = LocalBackend::open(&local.path)
+                .await
+                .map_err(|err| format!("failed to open local repository: {err}"))?;
+            Ok(Arc::new(backend))
+        }
+        RepositoryBackend::S3(s3) => {
+            let credentials =
+                load_s3_credentials_for_api(state, namespace, &s3.credentials_secret_ref).await?;
+            let backend = S3Backend::new(
+                S3Config {
+                    bucket: s3.bucket.clone(),
+                    prefix: s3.prefix.clone(),
+                    endpoint: s3.endpoint.clone(),
+                    region: s3.region.clone(),
+                    force_path_style: s3.force_path_style,
+                },
+                credentials,
+            )
+            .map_err(|err| format!("failed to build S3 client: {err}"))?;
+            Ok(Arc::new(backend))
+        }
+    }
+}
+
+async fn load_s3_credentials_for_api(
+    state: &ApiState,
+    namespace: &str,
+    secret_name: &str,
+) -> Result<proteus_core::S3Credentials, String> {
+    let secrets: Api<Secret> = Api::namespaced(state.client.clone(), namespace);
+    let secret = secrets
+        .get(secret_name)
+        .await
+        .map_err(|err| format!("credentials Secret '{secret_name}' not found: {err}"))?;
+    let decoded = decode_secret_data(secret.data.as_ref(), secret.string_data.as_ref());
+    credentials_from_secret_data(&decoded).map_err(|err| err.to_string())
+}
+
+fn decode_secret_data(
+    data: Option<&BTreeMap<String, ByteString>>,
+    string_data: Option<&BTreeMap<String, String>>,
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    if let Some(string_data) = string_data {
+        for (k, v) in string_data {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(data) = data {
+        for (k, v) in data {
+            if let Ok(s) = String::from_utf8(v.0.clone()) {
+                out.entry(k.clone()).or_insert(s);
+            }
+        }
+    }
+    out
+}
+
+fn restore_list_item(obj: &ProteusRestore) -> RestoreListItem {
+    RestoreListItem {
+        name: obj.name_any(),
+        namespace: object_namespace(obj),
+        backup_ref: obj.spec.backup_ref.clone(),
+        target_namespace: obj.spec.target_namespace.clone(),
+        phase: obj
+            .status
+            .as_ref()
+            .and_then(|s| s.phase.as_ref().and_then(phase_label)),
+        message: obj.status.as_ref().and_then(|s| s.message.clone()),
+        restored_snapshot_id: obj
+            .status
+            .as_ref()
+            .and_then(|s| s.restored_snapshot_id.clone()),
+    }
+}
+
 pub async fn list_restores(state: &ApiState) -> ApiResult<Vec<RestoreListItem>> {
     let api: Api<ProteusRestore> = Api::all(state.client.clone());
     let list = api.list(&ListParams::default()).await?;
-    Ok(list
-        .items
-        .into_iter()
-        .map(|obj| RestoreListItem {
-            name: obj.name_any(),
-            namespace: object_namespace(&obj),
-            backup_ref: obj.spec.backup_ref.clone(),
-            target_namespace: obj.spec.target_namespace.clone(),
-            phase: obj
-                .status
-                .as_ref()
-                .and_then(|s| s.phase.as_ref().and_then(phase_label)),
-            message: obj.status.as_ref().and_then(|s| s.message.clone()),
-        })
-        .collect())
+    Ok(list.items.iter().map(restore_list_item).collect())
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRestoreRequest {
+    pub name: String,
+    /// Namespace for the `ProteusRestore` CR itself; defaults to `targetNamespace`.
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub backup_ref: String,
+    /// Namespace of the source `ProteusBackup`; defaults to the restore's own namespace.
+    #[serde(default)]
+    pub backup_namespace: Option<String>,
+    /// Explicit snapshot id; omit to let the controller resolve the backup's latest snapshot.
+    #[serde(default)]
+    pub snapshot_id: Option<String>,
+    pub target_namespace: String,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+pub fn build_restore(req: &CreateRestoreRequest) -> ApiResult<(String, ProteusRestore)> {
+    let name = require_non_empty("name", Some(req.name.as_str()))?;
+    let target_namespace =
+        require_non_empty("targetNamespace", Some(req.target_namespace.as_str()))?;
+    let backup_ref = require_non_empty("backupRef", Some(req.backup_ref.as_str()))?;
+    let namespace =
+        optional_trimmed(req.namespace.as_deref()).unwrap_or_else(|| target_namespace.clone());
+
+    let restore = ProteusRestore {
+        metadata: ObjectMeta {
+            name: Some(name),
+            namespace: Some(namespace.clone()),
+            ..ObjectMeta::default()
+        },
+        spec: ProteusRestoreSpec {
+            backup_ref,
+            backup_namespace: optional_trimmed(req.backup_namespace.as_deref()),
+            snapshot_id: optional_trimmed(req.snapshot_id.as_deref()),
+            target_namespace,
+            overwrite: req.overwrite,
+            include_resources: None,
+        },
+        status: None,
+    };
+    Ok((namespace, restore))
+}
+
+pub async fn create_restore(
+    state: &ApiState,
+    req: CreateRestoreRequest,
+) -> ApiResult<RestoreListItem> {
+    let (namespace, restore) = build_restore(&req)?;
+    let api: Api<ProteusRestore> = Api::namespaced(state.client.clone(), &namespace);
+    let created = api.create(&PostParams::default(), &restore).await?;
+    let _ = state.refresh_counts().await;
+    Ok(restore_list_item(&created))
+}
+
+pub async fn delete_restore(state: &ApiState, namespace: &str, name: &str) -> ApiResult<()> {
+    let api: Api<ProteusRestore> = Api::namespaced(state.client.clone(), namespace);
+    api.delete(name, &DeleteParams::default()).await?;
+    let _ = state.refresh_counts().await;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1024,6 +1260,75 @@ mod tests {
         assert_eq!(namespace, "proteus-system");
         assert_eq!(backup.spec.target_namespace, "workloads");
         assert_eq!(backup.spec.pvc_names.len(), 2);
+    }
+
+    #[test]
+    fn build_restore_rejects_empty_backup_ref() {
+        let req = CreateRestoreRequest {
+            name: "r1".into(),
+            namespace: None,
+            backup_ref: "  ".into(),
+            backup_namespace: None,
+            snapshot_id: None,
+            target_namespace: "workloads".into(),
+            overwrite: false,
+        };
+        let err = build_restore(&req).expect_err("backupRef required");
+        assert!(err.to_string().contains("backupRef"));
+    }
+
+    #[test]
+    fn build_restore_rejects_empty_target_namespace() {
+        let req = CreateRestoreRequest {
+            name: "r1".into(),
+            namespace: None,
+            backup_ref: "backup-1".into(),
+            backup_namespace: None,
+            snapshot_id: None,
+            target_namespace: "".into(),
+            overwrite: false,
+        };
+        let err = build_restore(&req).expect_err("targetNamespace required");
+        assert!(err.to_string().contains("targetNamespace"));
+    }
+
+    #[test]
+    fn build_restore_defaults_namespace_to_target_namespace() {
+        let req = CreateRestoreRequest {
+            name: "r1".into(),
+            namespace: None,
+            backup_ref: "backup-1".into(),
+            backup_namespace: None,
+            snapshot_id: None,
+            target_namespace: "workloads".into(),
+            overwrite: true,
+        };
+        let (namespace, restore) = build_restore(&req).expect("valid");
+        assert_eq!(namespace, "workloads");
+        assert_eq!(restore.metadata.namespace.as_deref(), Some("workloads"));
+        assert!(restore.spec.overwrite);
+        assert!(restore.spec.snapshot_id.is_none());
+    }
+
+    #[test]
+    fn build_restore_honours_cross_namespace_backup_ref() {
+        let req = CreateRestoreRequest {
+            name: "r1".into(),
+            namespace: Some("proteus-system".into()),
+            backup_ref: "backup-1".into(),
+            backup_namespace: Some("proteus-system".into()),
+            snapshot_id: Some("deadbeef".into()),
+            target_namespace: "workloads".into(),
+            overwrite: false,
+        };
+        let (namespace, restore) = build_restore(&req).expect("valid");
+        assert_eq!(namespace, "proteus-system");
+        assert_eq!(
+            restore.spec.backup_namespace.as_deref(),
+            Some("proteus-system")
+        );
+        assert_eq!(restore.spec.snapshot_id.as_deref(), Some("deadbeef"));
+        assert_eq!(restore.spec.target_namespace, "workloads");
     }
 
     #[test]

@@ -29,51 +29,58 @@ a {
 
 .shell {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 200px 1fr;
   min-height: 100vh;
 }
 
 .nav {
   border-right: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 88%, black);
-  padding: 1.25rem 1rem;
+  padding: 0.85rem 0.7rem;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 0.85rem;
 }
 
 .brand {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.55rem;
   align-items: center;
+  padding: 0 0.35rem;
 }
 
 .brand-mark {
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 0.55rem;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.4rem;
   display: grid;
   place-items: center;
   background: linear-gradient(145deg, var(--accent), #1f6b56);
   font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.brand strong {
+  font-size: 0.95rem;
 }
 
 .brand p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.72rem;
 }
 
 .nav nav {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.2rem;
 }
 
 .nav a {
-  padding: 0.55rem 0.75rem;
-  border-radius: 0.45rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 0.4rem;
   color: var(--muted);
+  font-size: 0.92rem;
 }
 
 .nav a.active,
@@ -83,29 +90,50 @@ a {
 }
 
 .content {
-  padding: 1.75rem 2rem;
+  padding: 0.85rem 1.25rem 1.5rem;
+  min-width: 0;
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.page-header .toolbar {
+  margin: 0;
 }
 
 .page h1 {
-  margin: 0 0 0.35rem;
-  font-size: 1.6rem;
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
 }
 
 .lede {
-  margin: 0 0 1.5rem;
+  margin: 0 0 0.85rem;
   color: var(--muted);
   max-width: 42rem;
+  font-size: 0.85rem;
 }
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0.75rem;
-  padding: 1.1rem 1.2rem;
+  border-radius: 0.55rem;
+  padding: 0.75rem 0.9rem;
 }
 
 .panel + .panel {
-  margin-top: 1rem;
+  margin-top: 0.75rem;
 }
 
 .form-panel {
@@ -158,6 +186,176 @@ a {
   color: var(--muted);
   background: transparent;
   padding: 0;
+}
+
+/* Argo-style multi-line resource rows */
+.resource-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.resource-list.panel {
+  padding: 0.45rem;
+}
+
+.resource-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1.1fr) minmax(12rem, 1.6fr) minmax(9rem, 1fr) auto;
+  gap: 0.75rem 1.1rem;
+  align-items: center;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--panel) 70%, #0c1015);
+}
+
+.resource-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: #1a222c;
+}
+
+.resource-id {
+  min-width: 0;
+}
+
+.resource-ns {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-name {
+  display: block;
+  font-weight: 650;
+  font-size: 1rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-detail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.resource-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.45rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.resource-line > span,
+.resource-line > code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.3rem;
+  background: #243040;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-status {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+.resource-status .status-msg {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.resource-status .progress {
+  width: 100%;
+  max-width: 11rem;
+}
+
+.resource-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.section-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.85rem;
+  margin: 1rem 0 0.5rem;
+}
+
+.section-bar h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.section-bar .toolbar {
+  margin: 0;
+}
+
+.empty-state {
+  padding: 1rem 0.85rem;
+  text-align: left;
+}
+
+@media (max-width: 960px) {
+  .resource-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "id actions"
+      "detail detail"
+      "status status";
+  }
+
+  .resource-id {
+    grid-area: id;
+  }
+
+  .resource-detail {
+    grid-area: detail;
+  }
+
+  .resource-status {
+    grid-area: status;
+  }
+
+  .resource-actions {
+    grid-area: actions;
+  }
 }
 
 .cell-clip {
@@ -220,8 +418,8 @@ a {
 }
 
 .page h2 {
-  margin: 1.5rem 0 0.65rem;
-  font-size: 1.1rem;
+  margin: 1rem 0 0.5rem;
+  font-size: 0.95rem;
   font-weight: 600;
 }
 
@@ -406,8 +604,8 @@ a {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.65rem;
-  margin-bottom: 1rem;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .form-panel h2 {
@@ -514,6 +712,45 @@ a {
 .badge.phase-failed {
   color: #e8a0a0;
   background: color-mix(in srgb, #8a3b3b 35%, #243040);
+}
+
+.badge.phase-running {
+  color: #e6c07b;
+  background: color-mix(in srgb, #8a6a2b 35%, #243040);
+}
+
+.progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: 8.5rem;
+  max-width: 8.5rem;
+}
+
+.progress-track {
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #1a2430;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+  min-width: 0;
+}
+
+.progress-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  width: 2.6rem;
 }
 
 @media (max-width: 900px) {

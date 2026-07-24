@@ -2,7 +2,8 @@ mod backup;
 pub(crate) mod repository;
 mod restore;
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -34,6 +35,7 @@ impl ControllerSet {
         let ctx = Arc::new(ReconcileCtx {
             client: self.client,
             api_state: self.api_state,
+            active_backups: Mutex::new(HashSet::new()),
         });
 
         let repos = Api::<ProteusRepository>::all(client.clone());
@@ -91,6 +93,8 @@ impl ControllerSet {
 pub struct ReconcileCtx {
     pub client: Client,
     pub api_state: ApiState,
+    /// In-flight backup keys (`namespace/name`) so progress status patches do not start a second run.
+    pub active_backups: Mutex<HashSet<String>>,
 }
 
 fn error_policy<K>(_obj: Arc<K>, error: &ControllerError, _ctx: Arc<ReconcileCtx>) -> Action {

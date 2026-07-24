@@ -180,6 +180,56 @@ impl ObjectStore for LocalBackend {
             Err(source) => Err(CoreError::LocalIo { path, source }),
         }
     }
+
+    async fn list_ids(&self) -> CoreResult<Vec<ContentId>> {
+        let mut out = Vec::new();
+        let mut stack = vec![self.root.clone()];
+        while let Some(dir) = stack.pop() {
+            let mut entries = fs::read_dir(&dir)
+                .await
+                .map_err(|source| CoreError::LocalIo {
+                    path: dir.clone(),
+                    source,
+                })?;
+            loop {
+                let entry = entries
+                    .next_entry()
+                    .await
+                    .map_err(|source| CoreError::LocalIo {
+                        path: dir.clone(),
+                        source,
+                    })?;
+                let Some(entry) = entry else {
+                    break;
+                };
+                let path = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .await
+                    .map_err(|source| CoreError::LocalIo {
+                        path: path.clone(),
+                        source,
+                    })?;
+                if file_type.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if !file_type.is_file() {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let Some(hex) = name.strip_suffix(".blob") else {
+                    continue;
+                };
+                if let Ok(id) = ContentId::from_hex(hex) {
+                    out.push(id);
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]

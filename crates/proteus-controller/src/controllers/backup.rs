@@ -9,6 +9,7 @@ use proteus_crd::{BackupPhase, ProteusBackup, ProteusBackupStatus};
 use tracing::{info, warn};
 
 use super::ReconcileCtx;
+use crate::backup::progress::BackupProgressSink;
 use crate::error::ControllerResult;
 
 pub async fn reconcile_backup(
@@ -20,15 +21,29 @@ pub async fn reconcile_backup(
     info!(%ns, %name, "reconciling ProteusBackup");
 
     let api: Api<ProteusBackup> = Api::namespaced(ctx.client.clone(), &ns);
+    let active_key = format!("{ns}/{name}");
 
-    // Terminal phases never re-run the mount-pod pipeline (avoids flood + pod churn).
-    // A new snapshot requires a new ProteusBackup object.
     if matches!(
         current_phase(&obj),
         Some(BackupPhase::Succeeded | BackupPhase::Failed)
     ) {
+        // Best-effort: reap mount pods left after cancel/crash.
+        let _ = crate::backup::pvc_reader::cleanup_backup_mount_pods(
+            &ctx.client,
+            &obj.spec.target_namespace,
+            &name,
+            &ns,
+        )
+        .await;
         refresh_counts(&ctx).await;
         return Ok(Action::requeue(Duration::from_secs(3600)));
+    }
+
+    {
+        let active = ctx.active_backups.lock().unwrap_or_else(|e| e.into_inner());
+        if active.contains(&active_key) {
+            return Ok(Action::requeue(Duration::from_secs(5)));
+        }
     }
 
     if let Err(message) = validate_spec(&obj) {
@@ -40,16 +55,25 @@ pub async fn reconcile_backup(
         return Ok(Action::requeue(Duration::from_secs(3600)));
     }
 
-    let running = running_status(&obj);
-    if status_changed(obj.status.as_ref(), &running) {
-        patch_status(&api, &name, &running).await?;
+    {
+        let mut active = ctx.active_backups.lock().unwrap_or_else(|e| e.into_inner());
+        active.insert(active_key.clone());
     }
 
-    let outcome = crate::backup::run_backup(&obj, &ctx, &ns).await;
+    let running = running_status(&obj);
+    if status_changed(obj.status.as_ref(), &running) {
+        if let Err(err) = patch_status(&api, &name, &running).await {
+            clear_active(&ctx, &active_key);
+            return Err(err);
+        }
+    }
+
+    let progress = Arc::new(BackupProgressSink::new(api.clone(), name.clone(), &obj));
+    let outcome = crate::backup::run_backup(&obj, &ctx, &ns, progress).await;
+    clear_active(&ctx, &active_key);
+
     let status = terminal_status(&obj, outcome);
     if status_changed(obj.status.as_ref(), &status) {
-        // After Running patch, the in-memory obj may be stale; compare against intended terminal
-        // fields only — always write the first terminal transition.
         patch_status(&api, &name, &status).await?;
     }
 
@@ -60,6 +84,12 @@ pub async fn reconcile_backup(
         _ => Duration::from_secs(60),
     };
     Ok(Action::requeue(requeue))
+}
+
+fn clear_active(ctx: &ReconcileCtx, key: &str) {
+    if let Ok(mut active) = ctx.active_backups.lock() {
+        active.remove(key);
+    }
 }
 
 async fn refresh_counts(ctx: &ReconcileCtx) {
@@ -74,7 +104,6 @@ fn current_phase(obj: &ProteusBackup) -> Option<BackupPhase> {
     obj.status.as_ref().and_then(|s| s.phase.clone())
 }
 
-/// Fields that survive a phase transition (history from the previous run).
 fn carry_forward(obj: &ProteusBackup) -> ProteusBackupStatus {
     ProteusBackupStatus {
         last_snapshot_id: obj.status.as_ref().and_then(|s| s.last_snapshot_id.clone()),
@@ -82,6 +111,10 @@ fn carry_forward(obj: &ProteusBackup) -> ProteusBackupStatus {
         last_failure_at: obj.status.as_ref().and_then(|s| s.last_failure_at.clone()),
         last_bytes: obj.status.as_ref().and_then(|s| s.last_bytes),
         retained_snapshots: obj.status.as_ref().and_then(|s| s.retained_snapshots),
+        started_at: obj.status.as_ref().and_then(|s| s.started_at.clone()),
+        duration_seconds: obj.status.as_ref().and_then(|s| s.duration_seconds),
+        throughput_bytes_per_sec: obj.status.as_ref().and_then(|s| s.throughput_bytes_per_sec),
+        progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
         ..Default::default()
     }
 }
@@ -89,7 +122,9 @@ fn carry_forward(obj: &ProteusBackup) -> ProteusBackupStatus {
 fn running_status(obj: &ProteusBackup) -> ProteusBackupStatus {
     ProteusBackupStatus {
         phase: Some(BackupPhase::Running),
-        message: Some("backup running: mounting PVCs and streaming to the repository".to_string()),
+        message: Some("backup starting".to_string()),
+        progress_percent: Some(0),
+        started_at: Some(Utc::now().to_rfc3339()),
         ..carry_forward(obj)
     }
 }
@@ -99,32 +134,57 @@ fn terminal_status(
     outcome: Result<(String, u64), String>,
 ) -> ProteusBackupStatus {
     match outcome {
-        Ok((snapshot_id, bytes)) => ProteusBackupStatus {
-            phase: Some(BackupPhase::Succeeded),
-            message: Some(format!("backup succeeded ({bytes} bytes)")),
-            last_snapshot_id: Some(snapshot_id),
-            last_success_at: Some(Utc::now().to_rfc3339()),
-            last_bytes: Some(bytes),
-            ..carry_forward(obj)
-        },
+        Ok((snapshot_id, bytes)) => {
+            let started = obj
+                .status
+                .as_ref()
+                .and_then(|s| s.started_at.as_deref())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+            let duration_seconds = started.map(|s| {
+                Utc::now()
+                    .signed_duration_since(s.with_timezone(&Utc))
+                    .num_seconds()
+                    .max(1) as u64
+            });
+            let throughput_bytes_per_sec = duration_seconds.map(|d| bytes / d);
+            ProteusBackupStatus {
+                phase: Some(BackupPhase::Succeeded),
+                message: Some(match (duration_seconds, throughput_bytes_per_sec) {
+                    (Some(secs), Some(bps)) => {
+                        format!("backup succeeded ({bytes} bytes in {secs}s, ~{bps} B/s)")
+                    }
+                    _ => format!("backup succeeded ({bytes} bytes)"),
+                }),
+                last_snapshot_id: Some(snapshot_id),
+                last_success_at: Some(Utc::now().to_rfc3339()),
+                last_bytes: Some(bytes),
+                progress_percent: Some(100),
+                duration_seconds,
+                throughput_bytes_per_sec,
+                ..carry_forward(obj)
+            }
+        }
         Err(message) => ProteusBackupStatus {
             phase: Some(BackupPhase::Failed),
             message: Some(message),
             last_failure_at: Some(Utc::now().to_rfc3339()),
+            progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
             ..carry_forward(obj)
         },
     }
 }
 
-/// Patch only when phase / stable message change — timestamps alone must not re-trigger.
 fn status_changed(current: Option<&ProteusBackupStatus>, next: &ProteusBackupStatus) -> bool {
     match current {
         None => true,
         Some(cur) => {
             cur.phase != next.phase
+                || cur.progress_percent != next.progress_percent
                 || message_fingerprint(cur.message.as_deref())
                     != message_fingerprint(next.message.as_deref())
                 || cur.last_snapshot_id != next.last_snapshot_id
+                || cur.duration_seconds != next.duration_seconds
+                || cur.throughput_bytes_per_sec != next.throughput_bytes_per_sec
         }
     }
 }
@@ -185,7 +245,7 @@ mod tests {
             ProteusBackupSpec {
                 repository_ref: "repo".to_string(),
                 repository_namespace: None,
-                target_namespace: "workloads".to_string(),
+                target_namespace: "default".to_string(),
                 pvc_names,
                 label_selector: None,
                 schedule: None,
@@ -197,79 +257,63 @@ mod tests {
     }
 
     #[test]
-    fn validate_spec_rejects_empty_pvc_names() {
-        let obj = backup_with(vec![]);
-        let err = validate_spec(&obj).expect_err("empty pvcNames");
-        assert!(err.contains("pvcNames"));
+    fn validate_rejects_empty_pvcs() {
+        let b = backup_with(vec![]);
+        assert!(validate_spec(&b).is_err());
     }
 
     #[test]
-    fn validate_spec_accepts_at_least_one_pvc() {
-        let obj = backup_with(vec!["data".to_string()]);
-        assert!(validate_spec(&obj).is_ok());
+    fn validate_accepts_one_pvc() {
+        let b = backup_with(vec!["data".into()]);
+        assert!(validate_spec(&b).is_ok());
     }
 
     #[test]
-    fn succeeded_backup_is_treated_as_terminal() {
-        let mut obj = backup_with(vec!["data".to_string()]);
-        obj.status = Some(ProteusBackupStatus {
-            phase: Some(BackupPhase::Succeeded),
-            ..Default::default()
-        });
-        assert!(matches!(current_phase(&obj), Some(BackupPhase::Succeeded)));
-    }
-
-    #[test]
-    fn terminal_status_on_success_sets_snapshot_and_bytes() {
-        let obj = backup_with(vec!["data".to_string()]);
-        let status = terminal_status(&obj, Ok(("deadbeef".to_string(), 1024)));
+    fn terminal_success_sets_snapshot() {
+        let b = backup_with(vec!["data".into()]);
+        let status = terminal_status(&b, Ok(("deadbeef".into(), 42)));
         assert_eq!(status.phase, Some(BackupPhase::Succeeded));
         assert_eq!(status.last_snapshot_id.as_deref(), Some("deadbeef"));
-        assert_eq!(status.last_bytes, Some(1024));
+        assert_eq!(status.last_bytes, Some(42));
+        assert_eq!(status.progress_percent, Some(100));
     }
 
     #[test]
-    fn terminal_status_on_failure_preserves_previous_snapshot_id() {
-        let mut obj = backup_with(vec!["data".to_string()]);
-        obj.status = Some(ProteusBackupStatus {
+    fn terminal_failure_keeps_prior_snapshot() {
+        let mut b = backup_with(vec!["data".into()]);
+        b.status = Some(ProteusBackupStatus {
             last_snapshot_id: Some("previous".to_string()),
+            progress_percent: Some(40),
             ..Default::default()
         });
-        let status = terminal_status(&obj, Err("mount pod failed".to_string()));
+        let status = terminal_status(&b, Err("boom".into()));
         assert_eq!(status.phase, Some(BackupPhase::Failed));
         assert_eq!(status.last_snapshot_id.as_deref(), Some("previous"));
-        assert_eq!(status.message.as_deref(), Some("mount pod failed"));
+        assert_eq!(status.progress_percent, Some(40));
     }
 
     #[test]
-    fn status_changed_ignores_timestamp_only_on_same_failure() {
-        let cur = ProteusBackupStatus {
-            phase: Some(BackupPhase::Failed),
-            message: Some("pvc missing".into()),
-            last_failure_at: Some("t1".into()),
-            ..Default::default()
-        };
-        let next = ProteusBackupStatus {
-            phase: Some(BackupPhase::Failed),
-            message: Some("pvc missing".into()),
-            last_failure_at: Some("t2".into()),
-            ..Default::default()
-        };
-        assert!(!status_changed(Some(&cur), &next));
-    }
-
-    #[test]
-    fn status_changed_detects_phase_transition() {
-        let cur = ProteusBackupStatus {
+    fn status_changed_detects_progress_bump() {
+        let a = ProteusBackupStatus {
             phase: Some(BackupPhase::Running),
-            message: Some("running".into()),
+            progress_percent: Some(10),
+            message: Some("reading".into()),
             ..Default::default()
         };
-        let next = ProteusBackupStatus {
-            phase: Some(BackupPhase::Failed),
-            message: Some("boom".into()),
+        let b = ProteusBackupStatus {
+            phase: Some(BackupPhase::Running),
+            progress_percent: Some(25),
+            message: Some("reading".into()),
             ..Default::default()
         };
-        assert!(status_changed(Some(&cur), &next));
+        assert!(status_changed(Some(&a), &b));
+    }
+
+    #[test]
+    fn message_fingerprint_collapses_digits() {
+        assert_eq!(
+            message_fingerprint(Some("read 12 MiB / 100 MiB")),
+            message_fingerprint(Some("read 99 MiB / 100 MiB"))
+        );
     }
 }

@@ -12,6 +12,8 @@ docker build -f deploy/Dockerfile -t proteus-controller:local .
 
 The image builds the Dioxus WASM UI (`dx`) then the Rust controller, and embeds UI assets in the binary.
 
+Backups stream PVC data via a short-lived mount Pod + kube exec `tar` into the operator, which chunks and stores on the fly (no full-archive buffer). On success the Backup status records `durationSeconds` and `throughputBytesPerSec` for later measurement.
+
 ## Install with Kustomize
 
 ```bash
@@ -42,6 +44,22 @@ This overwrites YAML under `deploy/kustomize/crds/` from `kube::CustomResourceEx
 ```bash
 just samples
 ```
+
+## Restores
+
+A `ProteusRestore` resolves its source `ProteusBackup` (must be `Succeeded`), opens that backup's
+repository, and streams the snapshot's tar bytes into each PVC named in the snapshot, inside
+`spec.targetNamespace`.
+
+**Target PVCs must already exist** — M4 does not create or resize PVCs. Pre-provision a PVC per
+volume in the target namespace with the same name the backup used, then create the
+`ProteusRestore` (via the UI's "New restore" form, or the API). With `spec.overwrite: false`
+(default) a non-empty PVC fails the restore instead of silently merging data.
+
+No RBAC changes were needed for restores: the controller already has `pods`/`pods/exec` (create,
+exec, delete on a short-lived mount Pod) and `persistentvolumeclaims` `get/list/watch` from the
+backup path (`deploy/kustomize/base/clusterrole.yaml`) — restore only needs to read/exec Pods and
+read the target PVC's existence, never create or patch it.
 
 ## S3-compatible credentials Secret
 

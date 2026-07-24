@@ -282,6 +282,27 @@ impl ObjectStore for S3Backend {
             Err(err) => Err(Self::map_err(err)),
         }
     }
+
+    async fn list_ids(&self) -> CoreResult<Vec<ContentId>> {
+        let prefix = self.config.prefix.as_ref().and_then(|p| {
+            let trimmed = p.trim_matches('/');
+            (!trimmed.is_empty()).then(|| ObjectPath::from(format!("{trimmed}/")))
+        });
+        let mut stream = self.store.list(prefix.as_ref());
+        let mut out = Vec::new();
+        while let Some(item) = stream.next().await {
+            let meta = item.map_err(|err| CoreError::S3(format!("list failed: {err}")))?;
+            let path = meta.location.to_string();
+            let file = path.rsplit('/').next().unwrap_or(path.as_str());
+            let Some(hex) = file.strip_suffix(".blob") else {
+                continue;
+            };
+            if let Ok(id) = ContentId::from_hex(hex) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]

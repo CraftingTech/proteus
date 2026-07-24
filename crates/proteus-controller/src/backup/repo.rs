@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
-use kube::Api;
+use kube::{Api, Client};
 use proteus_core::{
     encryption_key_from_secret_data, EncryptionKey, LocalBackend, ObjectStore, S3Backend,
 };
@@ -11,7 +11,6 @@ use proteus_crd::{ProteusRepository, RepositoryBackend, RepositoryPhase};
 use std::collections::BTreeMap;
 
 use crate::controllers::repository::{load_s3_credentials, s3_config_from_spec};
-use crate::controllers::ReconcileCtx;
 
 /// A repository ready to receive a snapshot: its store, and encryption key if enabled.
 pub struct OpenedRepository {
@@ -22,13 +21,13 @@ pub struct OpenedRepository {
 /// Resolve `repo_ref` (in `repo_namespace`, falling back to `default_namespace`), require it be
 /// `Ready`, build its object store, and load the encryption key if `encryptionEnabled`.
 pub async fn open_repository(
-    ctx: &ReconcileCtx,
+    client: &Client,
     default_namespace: &str,
     repo_ref: &str,
     repo_namespace: Option<&str>,
 ) -> Result<OpenedRepository, String> {
     let ns = repo_namespace.unwrap_or(default_namespace);
-    let api: Api<ProteusRepository> = Api::namespaced(ctx.client.clone(), ns);
+    let api: Api<ProteusRepository> = Api::namespaced(client.clone(), ns);
     let repo = api
         .get(repo_ref)
         .await
@@ -48,7 +47,7 @@ pub async fn open_repository(
                 .map_err(|err| format!("failed to open local repository: {err}"))?,
         ),
         RepositoryBackend::S3(s3) => {
-            let credentials = load_s3_credentials(ctx, ns, &s3.credentials_secret_ref).await?;
+            let credentials = load_s3_credentials(client, ns, &s3.credentials_secret_ref).await?;
             let backend = S3Backend::new(s3_config_from_spec(s3), credentials)
                 .map_err(|err| format!("failed to build S3 client: {err}"))?;
             Arc::new(backend)
@@ -59,7 +58,7 @@ pub async fn open_repository(
         let secret_name = repo.spec.encryption_secret_ref.as_deref().ok_or_else(|| {
             format!("repository '{repo_ref}' has encryptionEnabled but no encryptionSecretRef")
         })?;
-        Some(load_encryption_key(ctx, ns, secret_name).await?)
+        Some(load_encryption_key(client, ns, secret_name).await?)
     } else {
         None
     };
@@ -71,11 +70,11 @@ pub async fn open_repository(
 }
 
 async fn load_encryption_key(
-    ctx: &ReconcileCtx,
+    client: &Client,
     namespace: &str,
     secret_name: &str,
 ) -> Result<EncryptionKey, String> {
-    let secrets: Api<Secret> = Api::namespaced(ctx.client.clone(), namespace);
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
     let secret = secrets.get(secret_name).await.map_err(|err| {
         format!("encryption Secret '{secret_name}' not found in namespace '{namespace}': {err}")
     })?;
