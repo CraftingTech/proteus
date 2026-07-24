@@ -1,6 +1,6 @@
 ---
 objective: "Operators can create local and S3-compatible ProteusRepositories from the UI/API, see Ready/Failed status, and the CAS S3 backend can put/get objects."
-status: in-progress
+status: implemented
 ---
 
 # Plan: M2 Repositories (local + S3)
