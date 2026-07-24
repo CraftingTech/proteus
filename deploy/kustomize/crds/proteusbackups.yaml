@@ -42,6 +42,12 @@ spec:
               labelSelector:
                 nullable: true
                 type: string
+              pvcNames:
+                description: PVCs to back up, by name, in `target_namespace`. Required, at least one.
+                items:
+                  type: string
+                minItems: 1
+                type: array
               repositoryNamespace:
                 nullable: true
                 type: string
@@ -68,6 +74,7 @@ spec:
               targetNamespace:
                 type: string
             required:
+            - pvcNames
             - repositoryRef
             - targetNamespace
             type: object

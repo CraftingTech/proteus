@@ -1,5 +1,5 @@
 mod backup;
-mod repository;
+pub(crate) mod repository;
 mod restore;
 
 use std::sync::Arc;

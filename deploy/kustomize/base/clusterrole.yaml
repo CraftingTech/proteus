@@ -24,8 +24,15 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch"]
+  # Pods: short-lived mount Pod per PVC backup (create/get/delete) + exec to stream tar.
   - apiGroups: [""]
-    resources: ["pods", "services", "configmaps"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
     verbs: ["get", "list", "watch"]
   # Secrets: read for S3 probe; create/update for UI-provided credentials.
   - apiGroups: [""]

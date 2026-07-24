@@ -83,6 +83,36 @@ spec:
     credentialsSecretRef: minio-creds
 ```
 
+## Encryption key Secret
+
+From the UI, check "Encrypt at rest" when creating a repository — Proteus generates a random
+256-bit key, base64-encodes it, and stores it in a Secret named `<repo>-encryption` (owned by the
+repository, so it's GC'd with it). `spec.encryptionSecretRef` is set to that Secret automatically.
+
+To bring your own key instead, create the Secret yourself and pass its name as
+`encryptionSecretRef` when creating the repository (via the API — the create call validates the
+Secret exists and contains a usable key before creating the CR):
+
+| Secret key | Accepted value |
+| ---------- | --------------- |
+| `encryptionKey` | 32 raw bytes, or that base64-encoded |
+| `ENCRYPTION_KEY` | same, checked if `encryptionKey` is absent |
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repo-1-encryption
+  namespace: proteus-system
+type: Opaque
+stringData:
+  encryptionKey: 6Y2v3q9m0s1z8h5j2k4l7p6q8r0t1u3v5w7x9y1z3a5b7c9d1e3f5g7h9i1j3k5l=
+```
+
+Every `ProteusBackup` snapshot chunk is BLAKE3-hashed on plaintext (for content addressing) and,
+when the repository has encryption enabled, AES-256-GCM encrypted before it is written to the
+object store — the blob on disk/S3 is never plaintext.
+
 ### MinIO smoke (optional)
 
 With MinIO listening locally (path-style):

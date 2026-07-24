@@ -1,14 +1,15 @@
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
+use k8s_openapi::ByteString;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
 use kube::{Api, ResourceExt};
 use proteus_crd::{
-    LocalBackendSpec, ProteusBackup, ProteusRepository, ProteusRepositorySpec, ProteusRestore,
-    RepositoryBackend, S3BackendSpec,
+    LocalBackendSpec, ProteusBackup, ProteusBackupSpec, ProteusRepository, ProteusRepositorySpec,
+    ProteusRestore, RepositoryBackend, RetentionPolicy, S3BackendSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::{object_namespace, ApiState};
@@ -41,9 +42,11 @@ pub struct BackupListItem {
     pub namespace: String,
     pub repository_ref: String,
     pub target_namespace: String,
+    pub pvc_names: Vec<String>,
     pub schedule: Option<String>,
     pub phase: Option<String>,
     pub message: Option<String>,
+    pub last_snapshot_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,6 +70,9 @@ pub struct CreateRepositoryRequest {
     pub description: Option<String>,
     #[serde(default)]
     pub encryption_enabled: Option<bool>,
+    /// Existing Secret name; omit (with `encryptionEnabled: true`) to have Proteus generate a key.
+    #[serde(default)]
+    pub encryption_secret_ref: Option<String>,
     pub backend: CreateRepositoryBackend,
 }
 
@@ -109,11 +115,19 @@ pub struct InlineS3Credentials {
     pub secret_access_key: String,
 }
 
+/// Generated encryption key to materialize as a Kubernetes Secret before/after CR create.
+#[derive(Clone, Debug)]
+pub struct InlineEncryptionKey {
+    pub secret_name: String,
+    pub key_base64: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedRepository {
     pub namespace: String,
     pub repo: ProteusRepository,
     pub inline_s3_credentials: Option<InlineS3Credentials>,
+    pub inline_encryption_key: Option<InlineEncryptionKey>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -207,10 +221,7 @@ pub fn backend_from_request(
     match backend {
         CreateRepositoryBackend::Local { path } => {
             let path = require_non_empty("backend.path", path.as_deref())?;
-            Ok((
-                RepositoryBackend::Local(LocalBackendSpec { path }),
-                None,
-            ))
+            Ok((RepositoryBackend::Local(LocalBackendSpec { path }), None))
         }
         CreateRepositoryBackend::S3 {
             bucket,
@@ -245,6 +256,35 @@ pub fn backend_from_request(
     }
 }
 
+/// When `encryption_enabled`: reuse a provided Secret ref as-is, or generate a fresh key +
+/// Secret name (`<repo>-encryption`) for the caller to materialize before/after CR create.
+fn resolve_encryption(
+    repo_name: &str,
+    encryption_enabled: bool,
+    encryption_secret_ref: Option<&str>,
+) -> (bool, Option<String>, Option<InlineEncryptionKey>) {
+    if !encryption_enabled {
+        return (false, None, None);
+    }
+    match optional_trimmed(encryption_secret_ref) {
+        Some(secret_ref) => (true, Some(secret_ref), None),
+        None => {
+            let secret_name = format!("{repo_name}-encryption");
+            let key_base64 = proteus_core::EncryptionKey::generate()
+                .to_base64()
+                .to_string();
+            (
+                true,
+                Some(secret_name.clone()),
+                Some(InlineEncryptionKey {
+                    secret_name,
+                    key_base64,
+                }),
+            )
+        }
+    }
+}
+
 pub fn build_repository(req: &CreateRepositoryRequest) -> ApiResult<PreparedRepository> {
     let name = require_non_empty("name", Some(req.name.as_str()))?;
     let namespace = resolve_namespace(req.namespace.as_deref())?;
@@ -255,6 +295,12 @@ pub fn build_repository(req: &CreateRepositoryRequest) -> ApiResult<PreparedRepo
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
+    let (encryption_enabled, encryption_secret_ref, inline_encryption_key) = resolve_encryption(
+        &name,
+        req.encryption_enabled.unwrap_or(false),
+        req.encryption_secret_ref.as_deref(),
+    );
+
     let repo = ProteusRepository {
         metadata: ObjectMeta {
             name: Some(name),
@@ -264,8 +310,8 @@ pub fn build_repository(req: &CreateRepositoryRequest) -> ApiResult<PreparedRepo
         spec: ProteusRepositorySpec {
             backend,
             description,
-            encryption_enabled: req.encryption_enabled.unwrap_or(false),
-            encryption_secret_ref: None,
+            encryption_enabled,
+            encryption_secret_ref,
         },
         status: None,
     };
@@ -273,6 +319,7 @@ pub fn build_repository(req: &CreateRepositoryRequest) -> ApiResult<PreparedRepo
         namespace,
         repo,
         inline_s3_credentials,
+        inline_encryption_key,
     })
 }
 
@@ -285,10 +332,7 @@ async fn upsert_s3_credentials_secret(
     let mut labels = BTreeMap::new();
     labels.insert(MANAGED_SECRET_LABEL.to_string(), "true".to_string());
     if let Some(repo) = owner {
-        labels.insert(
-            MANAGED_SECRET_REPO_LABEL.to_string(),
-            repo.name_any(),
-        );
+        labels.insert(MANAGED_SECRET_REPO_LABEL.to_string(), repo.name_any());
     }
 
     let mut string_data = BTreeMap::new();
@@ -354,6 +398,117 @@ async fn upsert_s3_credentials_secret(
     }
 }
 
+async fn upsert_encryption_secret(
+    state: &ApiState,
+    namespace: &str,
+    key: &InlineEncryptionKey,
+    owner: Option<&ProteusRepository>,
+) -> ApiResult<()> {
+    let mut labels = BTreeMap::new();
+    labels.insert(MANAGED_SECRET_LABEL.to_string(), "true".to_string());
+    if let Some(repo) = owner {
+        labels.insert(MANAGED_SECRET_REPO_LABEL.to_string(), repo.name_any());
+    }
+
+    let mut string_data = BTreeMap::new();
+    string_data.insert("encryptionKey".to_string(), key.key_base64.clone());
+
+    let owner_references = owner.and_then(|repo| {
+        let uid = repo.metadata.uid.as_ref()?;
+        Some(vec![OwnerReference {
+            api_version: "proteus.io/v1alpha1".to_string(),
+            kind: "ProteusRepository".to_string(),
+            name: repo.name_any(),
+            uid: uid.clone(),
+            controller: Some(true),
+            block_owner_deletion: Some(true),
+        }])
+    });
+
+    let secret = Secret {
+        metadata: ObjectMeta {
+            name: Some(key.secret_name.clone()),
+            namespace: Some(namespace.to_string()),
+            labels: Some(labels),
+            owner_references,
+            ..ObjectMeta::default()
+        },
+        type_: Some("Opaque".to_string()),
+        string_data: Some(string_data),
+        ..Secret::default()
+    };
+
+    let api: Api<Secret> = Api::namespaced(state.client.clone(), namespace);
+    match api.create(&PostParams::default(), &secret).await {
+        Ok(_) => Ok(()),
+        Err(kube::Error::Api(err)) if err.code == 409 => {
+            let patch = serde_json::json!({
+                "metadata": {
+                    "labels": {
+                        MANAGED_SECRET_LABEL: "true",
+                        MANAGED_SECRET_REPO_LABEL: owner.map(|r| r.name_any()).unwrap_or_default(),
+                    },
+                    "ownerReferences": secret.metadata.owner_references,
+                },
+                "type": "Opaque",
+                "stringData": {
+                    "encryptionKey": key.key_base64,
+                }
+            });
+            api.patch(
+                &key.secret_name,
+                &PatchParams::apply("proteus-api").force(),
+                &Patch::Apply(&patch),
+            )
+            .await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Decode a Secret's `data`/`stringData` into raw bytes (no lossy UTF-8 coercion), so both a
+/// base64 string and raw binary key material survive the round trip.
+fn decode_secret_raw_data(
+    data: Option<&BTreeMap<String, ByteString>>,
+    string_data: Option<&BTreeMap<String, String>>,
+) -> HashMap<String, Vec<u8>> {
+    let mut out = HashMap::new();
+    if let Some(string_data) = string_data {
+        for (k, v) in string_data {
+            out.insert(k.clone(), v.clone().into_bytes());
+        }
+    }
+    if let Some(data) = data {
+        for (k, v) in data {
+            out.entry(k.clone()).or_insert_with(|| v.0.clone());
+        }
+    }
+    out
+}
+
+/// Fail fast (before creating the CR) when the caller points at an existing encryption Secret
+/// that is missing or does not contain a parseable key.
+async fn validate_existing_encryption_secret(
+    state: &ApiState,
+    namespace: &str,
+    secret_name: &str,
+) -> ApiResult<()> {
+    let api: Api<Secret> = Api::namespaced(state.client.clone(), namespace);
+    let secret = api.get(secret_name).await.map_err(|_| {
+        ApiError::BadRequest(format!(
+            "encryptionSecretRef '{secret_name}' not found in namespace '{namespace}'"
+        ))
+    })?;
+    let raw = decode_secret_raw_data(secret.data.as_ref(), secret.string_data.as_ref());
+    proteus_core::encryption_key_from_secret_data(&raw).map_err(|err| {
+        ApiError::BadRequest(format!(
+            "encryptionSecretRef '{secret_name}' is invalid: {err}"
+        ))
+    })?;
+    Ok(())
+}
+
 pub async fn list_repositories(state: &ApiState) -> ApiResult<Vec<RepositoryListItem>> {
     let api: Api<ProteusRepository> = Api::all(state.client.clone());
     let list = api.list(&ListParams::default()).await?;
@@ -382,15 +537,30 @@ pub async fn create_repository(
         upsert_s3_credentials_secret(state, &namespace, creds, None).await?;
     }
 
+    match &prepared.inline_encryption_key {
+        Some(key) => upsert_encryption_secret(state, &namespace, key, None).await?,
+        None => {
+            // A caller-supplied ref (not generated here) must already be valid.
+            if let Some(secret_ref) = &prepared.repo.spec.encryption_secret_ref {
+                validate_existing_encryption_secret(state, &namespace, secret_ref).await?;
+            }
+        }
+    }
+
     let api: Api<ProteusRepository> = Api::namespaced(state.client.clone(), &namespace);
     let created = match api.create(&PostParams::default(), &prepared.repo).await {
         Ok(obj) => obj,
         Err(err) => {
-            // Best-effort cleanup of a Secret we just created for this failed request.
+            // Best-effort cleanup of Secrets we just created for this failed request.
+            let secrets: Api<Secret> = Api::namespaced(state.client.clone(), &namespace);
             if let Some(creds) = &prepared.inline_s3_credentials {
-                let secrets: Api<Secret> = Api::namespaced(state.client.clone(), &namespace);
                 let _ = secrets
                     .delete(&creds.secret_name, &DeleteParams::default())
+                    .await;
+            }
+            if let Some(key) = &prepared.inline_encryption_key {
+                let _ = secrets
+                    .delete(&key.secret_name, &DeleteParams::default())
                     .await;
             }
             return Err(err.into());
@@ -400,6 +570,9 @@ pub async fn create_repository(
     // Attach ownerReference so the Secret is GC'd with the repository.
     if let Some(creds) = &prepared.inline_s3_credentials {
         let _ = upsert_s3_credentials_secret(state, &namespace, creds, Some(&created)).await;
+    }
+    if let Some(key) = &prepared.inline_encryption_key {
+        let _ = upsert_encryption_secret(state, &namespace, key, Some(&created)).await;
     }
 
     let _ = state.refresh_counts().await;
@@ -468,25 +641,102 @@ pub async fn delete_repository(state: &ApiState, namespace: &str, name: &str) ->
     Ok(())
 }
 
+fn backup_list_item(obj: &ProteusBackup) -> BackupListItem {
+    BackupListItem {
+        name: obj.name_any(),
+        namespace: object_namespace(obj),
+        repository_ref: obj.spec.repository_ref.clone(),
+        target_namespace: obj.spec.target_namespace.clone(),
+        pvc_names: obj.spec.pvc_names.clone(),
+        schedule: obj.spec.schedule.clone(),
+        phase: obj
+            .status
+            .as_ref()
+            .and_then(|s| s.phase.as_ref().and_then(phase_label)),
+        message: obj.status.as_ref().and_then(|s| s.message.clone()),
+        last_snapshot_id: obj.status.as_ref().and_then(|s| s.last_snapshot_id.clone()),
+    }
+}
+
 pub async fn list_backups(state: &ApiState) -> ApiResult<Vec<BackupListItem>> {
     let api: Api<ProteusBackup> = Api::all(state.client.clone());
     let list = api.list(&ListParams::default()).await?;
-    Ok(list
-        .items
-        .into_iter()
-        .map(|obj| BackupListItem {
-            name: obj.name_any(),
-            namespace: object_namespace(&obj),
-            repository_ref: obj.spec.repository_ref.clone(),
-            target_namespace: obj.spec.target_namespace.clone(),
-            schedule: obj.spec.schedule.clone(),
-            phase: obj
-                .status
-                .as_ref()
-                .and_then(|s| s.phase.as_ref().and_then(phase_label)),
-            message: obj.status.as_ref().and_then(|s| s.message.clone()),
-        })
-        .collect())
+    Ok(list.items.iter().map(backup_list_item).collect())
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBackupRequest {
+    pub name: String,
+    /// Namespace for the `ProteusBackup` CR itself; defaults to `targetNamespace`.
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub repository_ref: String,
+    #[serde(default)]
+    pub repository_namespace: Option<String>,
+    pub target_namespace: String,
+    #[serde(default)]
+    pub pvc_names: Vec<String>,
+}
+
+pub fn build_backup(req: &CreateBackupRequest) -> ApiResult<(String, ProteusBackup)> {
+    let name = require_non_empty("name", Some(req.name.as_str()))?;
+    let target_namespace =
+        require_non_empty("targetNamespace", Some(req.target_namespace.as_str()))?;
+    let repository_ref = require_non_empty("repositoryRef", Some(req.repository_ref.as_str()))?;
+    let namespace =
+        optional_trimmed(req.namespace.as_deref()).unwrap_or_else(|| target_namespace.clone());
+
+    let pvc_names: Vec<String> = req
+        .pvc_names
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if pvc_names.is_empty() {
+        return Err(ApiError::BadRequest(
+            "pvcNames must contain at least one PVC name".to_string(),
+        ));
+    }
+
+    let backup = ProteusBackup {
+        metadata: ObjectMeta {
+            name: Some(name),
+            namespace: Some(namespace.clone()),
+            ..ObjectMeta::default()
+        },
+        spec: ProteusBackupSpec {
+            repository_ref,
+            repository_namespace: optional_trimmed(req.repository_namespace.as_deref()),
+            target_namespace,
+            pvc_names,
+            label_selector: None,
+            schedule: None,
+            retention: RetentionPolicy::default(),
+            include_volumes: true,
+            include_cluster_resources: false,
+        },
+        status: None,
+    };
+    Ok((namespace, backup))
+}
+
+pub async fn create_backup(
+    state: &ApiState,
+    req: CreateBackupRequest,
+) -> ApiResult<BackupListItem> {
+    let (namespace, backup) = build_backup(&req)?;
+    let api: Api<ProteusBackup> = Api::namespaced(state.client.clone(), &namespace);
+    let created = api.create(&PostParams::default(), &backup).await?;
+    let _ = state.refresh_counts().await;
+    Ok(backup_list_item(&created))
+}
+
+pub async fn delete_backup(state: &ApiState, namespace: &str, name: &str) -> ApiResult<()> {
+    let api: Api<ProteusBackup> = Api::namespaced(state.client.clone(), namespace);
+    api.delete(name, &DeleteParams::default()).await?;
+    let _ = state.refresh_counts().await;
+    Ok(())
 }
 
 pub async fn list_restores(state: &ApiState) -> ApiResult<Vec<RestoreListItem>> {
@@ -539,6 +789,7 @@ mod tests {
             namespace: None,
             description: None,
             encryption_enabled: None,
+            encryption_secret_ref: None,
             backend: CreateRepositoryBackend::Local { path: None },
         };
         let err = build_repository(&req).expect_err("path required");
@@ -552,6 +803,7 @@ mod tests {
             namespace: Some("proteus-system".into()),
             description: None,
             encryption_enabled: None,
+            encryption_secret_ref: None,
             backend: s3_backend(Some("  "), Some("s3-creds"), None, None, None),
         };
         let err = build_repository(&req).expect_err("bucket required");
@@ -565,13 +817,8 @@ mod tests {
             namespace: None,
             description: None,
             encryption_enabled: None,
-            backend: s3_backend(
-                Some("backups"),
-                None,
-                None,
-                None,
-                Some(true),
-            ),
+            encryption_secret_ref: None,
+            backend: s3_backend(Some("backups"), None, None, None, Some(true)),
         };
         let err = build_repository(&req).expect_err("credentials required");
         assert!(err.to_string().contains("accessKeyId"));
@@ -584,6 +831,7 @@ mod tests {
             namespace: None,
             description: None,
             encryption_enabled: None,
+            encryption_secret_ref: None,
             backend: s3_backend(Some("backups"), None, Some("AKIA"), None, None),
         };
         let err = build_repository(&req).expect_err("both keys required");
@@ -597,6 +845,7 @@ mod tests {
             namespace: None,
             description: Some("dev".into()),
             encryption_enabled: Some(true),
+            encryption_secret_ref: None,
             backend: CreateRepositoryBackend::Local {
                 path: Some("/var/lib/proteus/repo".into()),
             },
@@ -623,6 +872,7 @@ mod tests {
             namespace: Some("demo".into()),
             description: None,
             encryption_enabled: None,
+            encryption_secret_ref: None,
             backend: CreateRepositoryBackend::S3 {
                 bucket: Some("proteus".into()),
                 prefix: Some("cas/".into()),
@@ -653,6 +903,7 @@ mod tests {
             namespace: Some("default".into()),
             description: None,
             encryption_enabled: None,
+            encryption_secret_ref: None,
             backend: s3_backend(
                 Some("my-bucket"),
                 None,
@@ -678,6 +929,7 @@ mod tests {
             namespace: None,
             description: None,
             encryption_enabled: None,
+            encryption_secret_ref: None,
             backend: s3_backend(Some("proteus"), Some("minio-creds"), None, None, None),
         };
         let prepared = build_repository(&req).expect("valid");
@@ -688,19 +940,101 @@ mod tests {
     }
 
     #[test]
+    fn resolve_encryption_generates_key_when_enabled_without_ref() {
+        let (enabled, secret_ref, inline) = resolve_encryption("repo-1", true, None);
+        assert!(enabled);
+        assert_eq!(secret_ref.as_deref(), Some("repo-1-encryption"));
+        let inline = inline.expect("generated key");
+        assert_eq!(inline.secret_name, "repo-1-encryption");
+        assert!(!inline.key_base64.is_empty());
+    }
+
+    #[test]
+    fn resolve_encryption_reuses_provided_ref_without_generating() {
+        let (enabled, secret_ref, inline) =
+            resolve_encryption("repo-1", true, Some("existing-key"));
+        assert!(enabled);
+        assert_eq!(secret_ref.as_deref(), Some("existing-key"));
+        assert!(inline.is_none());
+    }
+
+    #[test]
+    fn resolve_encryption_disabled_ignores_ref() {
+        let (enabled, secret_ref, inline) = resolve_encryption("repo-1", false, Some("ignored"));
+        assert!(!enabled);
+        assert!(secret_ref.is_none());
+        assert!(inline.is_none());
+    }
+
+    #[test]
+    fn build_backup_rejects_empty_pvc_names() {
+        let req = CreateBackupRequest {
+            name: "b1".into(),
+            namespace: None,
+            repository_ref: "repo-1".into(),
+            repository_namespace: None,
+            target_namespace: "workloads".into(),
+            pvc_names: vec![],
+        };
+        let err = build_backup(&req).expect_err("pvcNames required");
+        assert!(err.to_string().contains("pvcNames"));
+    }
+
+    #[test]
+    fn build_backup_rejects_blank_pvc_names() {
+        let req = CreateBackupRequest {
+            name: "b1".into(),
+            namespace: None,
+            repository_ref: "repo-1".into(),
+            repository_namespace: None,
+            target_namespace: "workloads".into(),
+            pvc_names: vec!["  ".into()],
+        };
+        let err = build_backup(&req).expect_err("blank pvc name filtered out");
+        assert!(err.to_string().contains("pvcNames"));
+    }
+
+    #[test]
+    fn build_backup_defaults_namespace_to_target_namespace() {
+        let req = CreateBackupRequest {
+            name: "b1".into(),
+            namespace: None,
+            repository_ref: "repo-1".into(),
+            repository_namespace: None,
+            target_namespace: "workloads".into(),
+            pvc_names: vec!["data-pvc".into()],
+        };
+        let (namespace, backup) = build_backup(&req).expect("valid");
+        assert_eq!(namespace, "workloads");
+        assert_eq!(backup.metadata.namespace.as_deref(), Some("workloads"));
+        assert_eq!(backup.spec.pvc_names, vec!["data-pvc".to_string()]);
+    }
+
+    #[test]
+    fn build_backup_honours_explicit_namespace() {
+        let req = CreateBackupRequest {
+            name: "b1".into(),
+            namespace: Some("proteus-system".into()),
+            repository_ref: "repo-1".into(),
+            repository_namespace: Some("proteus-system".into()),
+            target_namespace: "workloads".into(),
+            pvc_names: vec!["data-pvc".into(), "logs-pvc".into()],
+        };
+        let (namespace, backup) = build_backup(&req).expect("valid");
+        assert_eq!(namespace, "proteus-system");
+        assert_eq!(backup.spec.target_namespace, "workloads");
+        assert_eq!(backup.spec.pvc_names.len(), 2);
+    }
+
+    #[test]
     fn s3_force_path_style_false_when_explicit() {
         let req = CreateRepositoryRequest {
             name: "s3-aws".into(),
             namespace: None,
             description: None,
             encryption_enabled: None,
-            backend: s3_backend(
-                Some("proteus"),
-                Some("aws-creds"),
-                None,
-                None,
-                Some(false),
-            ),
+            encryption_secret_ref: None,
+            backend: s3_backend(Some("proteus"), Some("aws-creds"), None, None, Some(false)),
         };
         let prepared = build_repository(&req).expect("valid");
         assert!(matches!(

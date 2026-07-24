@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+proteus-core = { workspace = true }
 proteus-crd = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
