@@ -11,10 +11,10 @@ use crate::error::ApiResult;
 use crate::inventory::{list_inventory, InventoryItem, InventoryQuery};
 use crate::namespaces::{list_namespaces, NamespaceItem};
 use crate::resources::{
-    create_backup, create_repository, delete_backup, delete_repository, get_repository,
-    list_backups, list_repositories, list_restores, patch_repository, BackupListItem,
-    CreateBackupRequest, CreateRepositoryRequest, PatchRepositoryRequest, RepositoryListItem,
-    RestoreListItem,
+    create_backup, create_repository, create_restore, delete_backup, delete_repository,
+    delete_restore, get_repository, list_backups, list_repositories, list_restores,
+    patch_repository, BackupListItem, CreateBackupRequest, CreateRepositoryRequest,
+    CreateRestoreRequest, PatchRepositoryRequest, RepositoryListItem, RestoreListItem,
 };
 use crate::state::{ApiState, ClusterSnapshot};
 use crate::ui::static_handler;
@@ -54,7 +54,14 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/backups/{namespace}/{name}",
             delete(delete_backup_handler),
         )
-        .route("/api/v1/restores", get(restores))
+        .route(
+            "/api/v1/restores",
+            get(restores).post(create_restore_handler),
+        )
+        .route(
+            "/api/v1/restores/{namespace}/{name}",
+            delete(delete_restore_handler),
+        )
         .route("/api/v1/inventory", get(inventory))
         .route("/api/v1/namespaces", get(namespaces))
         .route("/metrics", get(metrics_placeholder))
@@ -151,6 +158,22 @@ async fn delete_backup_handler(
 
 async fn restores(State(state): State<ApiState>) -> ApiResult<Json<Vec<RestoreListItem>>> {
     Ok(Json(list_restores(&state).await?))
+}
+
+async fn create_restore_handler(
+    State(state): State<ApiState>,
+    Json(body): Json<CreateRestoreRequest>,
+) -> ApiResult<(StatusCode, Json<RestoreListItem>)> {
+    let item = create_restore(&state, body).await?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn delete_restore_handler(
+    State(state): State<ApiState>,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    delete_restore(&state, &namespace, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn inventory(

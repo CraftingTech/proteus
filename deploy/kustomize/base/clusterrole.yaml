@@ -24,7 +24,7 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch"]
-  # Pods: short-lived mount Pod per PVC backup (create/get/delete) + exec to stream tar.
+  # Pods: short-lived mount Pod per PVC backup/restore + exec to stream tar.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch", "create", "delete"]

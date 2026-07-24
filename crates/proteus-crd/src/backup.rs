@@ -80,6 +80,18 @@ pub struct ProteusBackupStatus {
     pub last_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_snapshots: Option<u32>,
+    /// 0–100 while `phase` is Running; 100 on Succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<u8>,
+    /// When the current/last run started (RFC3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// Wall-clock duration of a successful run, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<u64>,
+    /// Approximate throughput of a successful run (`lastBytes / durationSeconds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throughput_bytes_per_sec: Option<u64>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]

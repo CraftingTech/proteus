@@ -1,6 +1,7 @@
 mod backup;
 mod controllers;
 mod error;
+mod restore;
 
 use std::net::SocketAddr;
 use std::time::Duration;

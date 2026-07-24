@@ -7,9 +7,8 @@ pub fn Cluster() -> Element {
 
     rsx! {
         section { class: "page",
-            h1 { "Cluster" }
-            p { class: "lede",
-                "Single-cluster overview from the embedded Proteus API."
+            div { class: "page-header",
+                h1 { "Cluster" }
             }
 
             match &*snapshot.read_unchecked() {

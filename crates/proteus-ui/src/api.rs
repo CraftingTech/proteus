@@ -74,6 +74,12 @@ pub struct BackupListItem {
     pub message: Option<String>,
     #[serde(default)]
     pub last_snapshot_id: Option<String>,
+    #[serde(default)]
+    pub progress_percent: Option<u8>,
+    #[serde(default)]
+    pub duration_seconds: Option<u64>,
+    #[serde(default)]
+    pub throughput_bytes_per_sec: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -97,6 +103,22 @@ pub struct RestoreListItem {
     pub target_namespace: String,
     pub phase: Option<String>,
     pub message: Option<String>,
+    #[serde(default)]
+    pub restored_snapshot_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRestoreRequest {
+    pub name: String,
+    pub namespace: String,
+    pub backup_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    pub target_namespace: String,
+    pub overwrite: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -280,6 +302,19 @@ pub async fn delete_backup(namespace: &str, name: &str) -> Result<(), ApiClientE
 
 pub async fn list_restores() -> Result<Vec<RestoreListItem>, ApiClientError> {
     get_json("/api/v1/restores").await
+}
+
+pub async fn create_restore(req: &CreateRestoreRequest) -> Result<RestoreListItem, ApiClientError> {
+    send_json("POST", "/api/v1/restores", req).await
+}
+
+pub async fn delete_restore(namespace: &str, name: &str) -> Result<(), ApiClientError> {
+    let path = format!(
+        "/api/v1/restores/{}/{}",
+        urlencoding_lite(namespace),
+        urlencoding_lite(name)
+    );
+    send_empty("DELETE", &path).await
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]

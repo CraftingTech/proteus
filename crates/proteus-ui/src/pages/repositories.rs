@@ -176,26 +176,24 @@ pub fn Repositories() -> Element {
 
     rsx! {
         section { class: "page",
-            h1 { "Repositories" }
-            p { class: "lede",
-                "Create and manage ProteusRepository custom resources — local path or S3-compatible."
-            }
-
-            div { class: "toolbar",
-                button {
-                    class: "btn",
-                    r#type: "button",
-                    onclick: move |_| {
-                        show_form.set(!show_form());
-                        form_error.set(None);
-                    },
-                    if show_form() { "Cancel" } else { "+ New repository" }
-                }
-                button {
-                    class: "btn",
-                    r#type: "button",
-                    onclick: move |_| refresh_tick.set(refresh_tick() + 1),
-                    "Refresh"
+            div { class: "page-header",
+                h1 { "Repositories" }
+                div { class: "toolbar",
+                    button {
+                        class: "btn",
+                        r#type: "button",
+                        onclick: move |_| {
+                            show_form.set(!show_form());
+                            form_error.set(None);
+                        },
+                        if show_form() { "Cancel" } else { "+ New repository" }
+                    }
+                    button {
+                        class: "btn",
+                        r#type: "button",
+                        onclick: move |_| refresh_tick.set(refresh_tick() + 1),
+                        "Refresh"
+                    }
                 }
             }
 

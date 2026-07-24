@@ -25,4 +25,7 @@ pub trait ObjectStore: Send + Sync {
     async fn exists(&self, id: &ContentId) -> CoreResult<bool>;
 
     async fn delete(&self, id: &ContentId) -> CoreResult<()>;
+
+    /// List every content id currently stored (for GC). Order is undefined.
+    async fn list_ids(&self) -> CoreResult<Vec<ContentId>>;
 }

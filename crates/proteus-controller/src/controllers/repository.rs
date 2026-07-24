@@ -147,7 +147,7 @@ async fn probe_repository(
         RepositoryBackend::S3(s3) => {
             validate_s3_fields(s3)?;
             let credentials =
-                load_s3_credentials(ctx, namespace, &s3.credentials_secret_ref).await?;
+                load_s3_credentials(&ctx.client, namespace, &s3.credentials_secret_ref).await?;
             let backend = S3Backend::new(s3_config_from_spec(s3), credentials)
                 .map_err(|err| format!("failed to build S3 client: {err}"))?;
             backend.probe().await.map_err(|err| {
@@ -187,11 +187,11 @@ pub(crate) fn s3_config_from_spec(s3: &S3BackendSpec) -> S3Config {
 }
 
 pub(crate) async fn load_s3_credentials(
-    ctx: &ReconcileCtx,
+    client: &kube::Client,
     namespace: &str,
     secret_name: &str,
 ) -> Result<S3Credentials, String> {
-    let secrets: Api<Secret> = Api::namespaced(ctx.client.clone(), namespace);
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
     let secret = secrets
         .get(secret_name)
         .await
