@@ -31,7 +31,11 @@ pub async fn reconcile_restore(
             .status
             .as_ref()
             .and_then(|s| s.restored_snapshot_id.clone()),
-        progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent).or(Some(0)),
+        progress_percent: obj
+            .status
+            .as_ref()
+            .and_then(|s| s.progress_percent)
+            .or(Some(0)),
         completed_at: obj.status.as_ref().and_then(|s| s.completed_at.clone()),
     };
 

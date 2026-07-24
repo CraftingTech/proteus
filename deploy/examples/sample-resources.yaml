@@ -20,6 +20,8 @@ metadata:
 spec:
   repositoryRef: local-repo
   targetNamespace: demo
+  pvcNames:
+    - demo-data
   schedule: "0 2 * * *"
   includeVolumes: true
   retention:

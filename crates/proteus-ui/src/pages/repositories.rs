@@ -31,6 +31,7 @@ pub fn Repositories() -> Element {
     let mut secret_access_key = use_signal(String::new);
     let mut credentials_secret_ref = use_signal(String::new);
     let mut force_path_style = use_signal(|| true);
+    let mut encryption_enabled = use_signal(|| false);
     let mut form_error = use_signal(|| Option::<String>::None);
     let mut form_busy = use_signal(|| false);
     let mut action_error = use_signal(|| Option::<String>::None);
@@ -117,9 +118,7 @@ pub fn Repositories() -> Element {
                 let has_inline = !access_key.is_empty() || !secret_key.is_empty();
                 if has_inline {
                     if access_key.is_empty() || secret_key.is_empty() {
-                        form_error.set(Some(
-                            "Access Key and Secret Key are both required".into(),
-                        ));
+                        form_error.set(Some("Access Key and Secret Key are both required".into()));
                         return;
                     }
                 } else if secret_ref.is_empty() {
@@ -149,7 +148,7 @@ pub fn Repositories() -> Element {
             name: repo_name,
             namespace: repo_ns,
             description: (!desc.is_empty()).then_some(desc),
-            encryption_enabled: false,
+            encryption_enabled: encryption_enabled(),
             backend,
         };
 
@@ -162,6 +161,7 @@ pub fn Repositories() -> Element {
                     access_key_id.set(String::new());
                     secret_access_key.set(String::new());
                     credentials_secret_ref.set(String::new());
+                    encryption_enabled.set(false);
                     show_form.set(false);
                     form_busy.set(false);
                     refresh_tick.set(refresh_tick() + 1);
@@ -254,6 +254,18 @@ pub fn Repositories() -> Element {
                                 r#type: "text",
                                 value: "{description}",
                                 oninput: move |evt| description.set(evt.value()),
+                            }
+                        }
+
+                        label { class: "checkbox form-span-2",
+                            input {
+                                r#type: "checkbox",
+                                checked: encryption_enabled(),
+                                onchange: move |evt| encryption_enabled.set(evt.checked()),
+                            }
+                            " Encrypt at rest"
+                            span { class: "field-hint muted",
+                                " — Proteus generates a key and stores it in Secret \"{name()}-encryption\"."
                             }
                         }
 

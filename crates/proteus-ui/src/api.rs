@@ -67,9 +67,25 @@ pub struct BackupListItem {
     pub namespace: String,
     pub repository_ref: String,
     pub target_namespace: String,
+    #[serde(default)]
+    pub pvc_names: Vec<String>,
     pub schedule: Option<String>,
     pub phase: Option<String>,
     pub message: Option<String>,
+    #[serde(default)]
+    pub last_snapshot_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBackupRequest {
+    pub name: String,
+    pub namespace: String,
+    pub repository_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_namespace: Option<String>,
+    pub target_namespace: String,
+    pub pvc_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -247,6 +263,19 @@ pub async fn delete_repository(namespace: &str, name: &str) -> Result<(), ApiCli
 
 pub async fn list_backups() -> Result<Vec<BackupListItem>, ApiClientError> {
     get_json("/api/v1/backups").await
+}
+
+pub async fn create_backup(req: &CreateBackupRequest) -> Result<BackupListItem, ApiClientError> {
+    send_json("POST", "/api/v1/backups", req).await
+}
+
+pub async fn delete_backup(namespace: &str, name: &str) -> Result<(), ApiClientError> {
+    let path = format!(
+        "/api/v1/backups/{}/{}",
+        urlencoding_lite(namespace),
+        urlencoding_lite(name)
+    );
+    send_empty("DELETE", &path).await
 }
 
 pub async fn list_restores() -> Result<Vec<RestoreListItem>, ApiClientError> {

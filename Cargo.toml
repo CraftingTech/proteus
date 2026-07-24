@@ -36,7 +36,7 @@ futures = "0.3"
 bytes = "1.9"
 
 # Kubernetes
-kube = { version = "0.98", default-features = false, features = ["client", "runtime", "derive", "rustls-tls"] }
+kube = { version = "0.98", default-features = false, features = ["client", "runtime", "derive", "rustls-tls", "ws"] }
 k8s-openapi = { version = "0.24", default-features = false, features = ["v1_30"] }
 schemars = "0.8"
 
@@ -61,6 +61,7 @@ blake3 = "1.5"
 aes-gcm = "0.10"
 rand = "0.8"
 zeroize = { version = "1.8", features = ["derive"] }
+base64 = "0.22"
 
 # Observability
 tracing = "0.1"

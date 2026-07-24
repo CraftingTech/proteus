@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use serde::Serialize;
 use tower_http::cors::{Any, CorsLayer};
@@ -11,9 +11,10 @@ use crate::error::ApiResult;
 use crate::inventory::{list_inventory, InventoryItem, InventoryQuery};
 use crate::namespaces::{list_namespaces, NamespaceItem};
 use crate::resources::{
-    create_repository, delete_repository, get_repository, list_backups, list_repositories,
-    list_restores, patch_repository, BackupListItem, CreateRepositoryRequest,
-    PatchRepositoryRequest, RepositoryListItem, RestoreListItem,
+    create_backup, create_repository, delete_backup, delete_repository, get_repository,
+    list_backups, list_repositories, list_restores, patch_repository, BackupListItem,
+    CreateBackupRequest, CreateRepositoryRequest, PatchRepositoryRequest, RepositoryListItem,
+    RestoreListItem,
 };
 use crate::state::{ApiState, ClusterSnapshot};
 use crate::ui::static_handler;
@@ -48,7 +49,11 @@ pub fn router(state: ApiState) -> Router {
                 .patch(patch_repository_handler)
                 .delete(delete_repository_handler),
         )
-        .route("/api/v1/backups", get(backups))
+        .route("/api/v1/backups", get(backups).post(create_backup_handler))
+        .route(
+            "/api/v1/backups/{namespace}/{name}",
+            delete(delete_backup_handler),
+        )
         .route("/api/v1/restores", get(restores))
         .route("/api/v1/inventory", get(inventory))
         .route("/api/v1/namespaces", get(namespaces))
@@ -126,6 +131,22 @@ async fn delete_repository_handler(
 
 async fn backups(State(state): State<ApiState>) -> ApiResult<Json<Vec<BackupListItem>>> {
     Ok(Json(list_backups(&state).await?))
+}
+
+async fn create_backup_handler(
+    State(state): State<ApiState>,
+    Json(body): Json<CreateBackupRequest>,
+) -> ApiResult<(StatusCode, Json<BackupListItem>)> {
+    let item = create_backup(&state, body).await?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn delete_backup_handler(
+    State(state): State<ApiState>,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    delete_backup(&state, &namespace, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn restores(State(state): State<ApiState>) -> ApiResult<Json<Vec<RestoreListItem>>> {

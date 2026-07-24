@@ -4,6 +4,7 @@
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 
+pub mod backup;
 pub mod chunking;
 pub mod crypto;
 pub mod error;
@@ -11,7 +12,10 @@ pub mod hash;
 pub mod storage;
 
 pub use chunking::{Chunk, Chunker, DEFAULT_CHUNK_SIZE};
-pub use crypto::{decrypt, encrypt, Ciphertext, EncryptionKey};
+pub use crypto::{
+    decrypt, encrypt, encryption_key_from_secret_data, Ciphertext, EncryptionKey,
+    ENCRYPTION_KEY_SECRET_KEYS,
+};
 pub use error::{CoreError, CoreResult};
 pub use hash::{hash_bytes, ContentId};
 pub use storage::{

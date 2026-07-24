@@ -142,10 +142,7 @@ async fn probe_repository(
             let resolved = LocalBackend::probe(&local.path)
                 .await
                 .map_err(|err| format!("local path not writable: {err}"))?;
-            Ok(format!(
-                "local repository ready at {}",
-                resolved.display()
-            ))
+            Ok(format!("local repository ready at {}", resolved.display()))
         }
         RepositoryBackend::S3(s3) => {
             validate_s3_fields(s3)?;
@@ -179,7 +176,7 @@ fn validate_s3_fields(s3: &S3BackendSpec) -> Result<(), String> {
     Ok(())
 }
 
-fn s3_config_from_spec(s3: &S3BackendSpec) -> S3Config {
+pub(crate) fn s3_config_from_spec(s3: &S3BackendSpec) -> S3Config {
     S3Config {
         bucket: s3.bucket.clone(),
         prefix: s3.prefix.clone(),
@@ -189,7 +186,7 @@ fn s3_config_from_spec(s3: &S3BackendSpec) -> S3Config {
     }
 }
 
-async fn load_s3_credentials(
+pub(crate) async fn load_s3_credentials(
     ctx: &ReconcileCtx,
     namespace: &str,
     secret_name: &str,

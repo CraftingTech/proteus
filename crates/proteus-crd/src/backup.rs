@@ -22,6 +22,9 @@ pub struct ProteusBackupSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository_namespace: Option<String>,
     pub target_namespace: String,
+    /// PVCs to back up, by name, in `target_namespace`. Required, at least one.
+    #[schemars(length(min = 1))]
+    pub pvc_names: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_selector: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
