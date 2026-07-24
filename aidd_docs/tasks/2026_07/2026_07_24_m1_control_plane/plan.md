@@ -1,6 +1,6 @@
 ---
 objective: "Operators can see live Proteus CR counts, list CRs, browse cluster inventory (6 kinds) with filters, and get honest /readyz from the embedded UI."
-status: in-progress
+status: implemented
 ---
 
 # Plan: M1 Live control plane + cluster inventory
