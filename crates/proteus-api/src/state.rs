@@ -73,6 +73,12 @@ impl ApiState {
                     warn!(?missing, "readiness: required CRDs missing");
                 }
             }
+            Err(err) if is_auth_or_rbac_error(&err) => {
+                warn!(error = %err, "readiness: CRD check denied by auth/RBAC");
+                let mut gate = self.readiness.write();
+                gate.kube_reachable = true;
+                gate.crds_ready = false;
+            }
             Err(err) => {
                 warn!(error = %err, "readiness: kube unreachable");
                 let mut gate = self.readiness.write();
@@ -106,6 +112,13 @@ impl ApiState {
         snap.last_reconcile_at = Some(Utc::now().to_rfc3339());
         Ok(())
     }
+}
+
+fn is_auth_or_rbac_error(err: &kube::Error) -> bool {
+    matches!(
+        err,
+        kube::Error::Api(api) if api.code == 401 || api.code == 403
+    )
 }
 
 pub async fn check_required_crds(client: &Client) -> Result<Vec<&'static str>, kube::Error> {

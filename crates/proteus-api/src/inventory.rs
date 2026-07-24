@@ -1,7 +1,11 @@
+use std::fmt::Debug;
+
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Secret, Service};
-use kube::api::ListParams;
-use kube::{Api, ResourceExt};
+use k8s_openapi::NamespaceResourceScope;
+use kube::api::{ListParams, PartialObjectMeta};
+use kube::{Api, Resource, ResourceExt};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ApiError, ApiResult};
@@ -99,24 +103,55 @@ async fn list_kind(
     }
 }
 
-async fn list_deployments(
-    state: &ApiState,
-    namespace: Option<&str>,
-) -> ApiResult<Vec<InventoryItem>> {
+async fn list_objects<K>(state: &ApiState, namespace: Option<&str>) -> ApiResult<Vec<K>>
+where
+    K: Resource<Scope = NamespaceResourceScope> + Clone + DeserializeOwned + Debug,
+    <K as Resource>::DynamicType: Default,
+{
     let list = match namespace.filter(|ns| !ns.is_empty()) {
         Some(ns) => {
-            Api::<Deployment>::namespaced(state.client.clone(), ns)
+            Api::<K>::namespaced(state.client.clone(), ns)
                 .list(&ListParams::default())
                 .await?
         }
         None => {
-            Api::<Deployment>::all(state.client.clone())
+            Api::<K>::all(state.client.clone())
                 .list(&ListParams::default())
                 .await?
         }
     };
-    Ok(list
-        .items
+    Ok(list.items)
+}
+
+async fn list_object_metadata<K>(
+    state: &ApiState,
+    namespace: Option<&str>,
+) -> ApiResult<Vec<PartialObjectMeta<K>>>
+where
+    K: Resource<Scope = NamespaceResourceScope> + Clone + DeserializeOwned + Debug,
+    <K as Resource>::DynamicType: Default,
+{
+    let list = match namespace.filter(|ns| !ns.is_empty()) {
+        Some(ns) => {
+            Api::<K>::namespaced(state.client.clone(), ns)
+                .list_metadata(&ListParams::default())
+                .await?
+        }
+        None => {
+            Api::<K>::all(state.client.clone())
+                .list_metadata(&ListParams::default())
+                .await?
+        }
+    };
+    Ok(list.items)
+}
+
+async fn list_deployments(
+    state: &ApiState,
+    namespace: Option<&str>,
+) -> ApiResult<Vec<InventoryItem>> {
+    let items = list_objects::<Deployment>(state, namespace).await?;
+    Ok(items
         .into_iter()
         .map(|obj| {
             let ready = obj
@@ -136,20 +171,8 @@ async fn list_deployments(
 }
 
 async fn list_pods(state: &ApiState, namespace: Option<&str>) -> ApiResult<Vec<InventoryItem>> {
-    let list = match namespace.filter(|ns| !ns.is_empty()) {
-        Some(ns) => {
-            Api::<Pod>::namespaced(state.client.clone(), ns)
-                .list(&ListParams::default())
-                .await?
-        }
-        None => {
-            Api::<Pod>::all(state.client.clone())
-                .list(&ListParams::default())
-                .await?
-        }
-    };
-    Ok(list
-        .items
+    let items = list_objects::<Pod>(state, namespace).await?;
+    Ok(items
         .into_iter()
         .map(|obj| {
             let phase = obj
@@ -168,20 +191,8 @@ async fn list_pods(state: &ApiState, namespace: Option<&str>) -> ApiResult<Vec<I
 }
 
 async fn list_services(state: &ApiState, namespace: Option<&str>) -> ApiResult<Vec<InventoryItem>> {
-    let list = match namespace.filter(|ns| !ns.is_empty()) {
-        Some(ns) => {
-            Api::<Service>::namespaced(state.client.clone(), ns)
-                .list(&ListParams::default())
-                .await?
-        }
-        None => {
-            Api::<Service>::all(state.client.clone())
-                .list(&ListParams::default())
-                .await?
-        }
-    };
-    Ok(list
-        .items
+    let items = list_objects::<Service>(state, namespace).await?;
+    Ok(items
         .into_iter()
         .map(|obj| {
             let svc_type = obj
@@ -200,20 +211,8 @@ async fn list_services(state: &ApiState, namespace: Option<&str>) -> ApiResult<V
 }
 
 async fn list_pvcs(state: &ApiState, namespace: Option<&str>) -> ApiResult<Vec<InventoryItem>> {
-    let list = match namespace.filter(|ns| !ns.is_empty()) {
-        Some(ns) => {
-            Api::<PersistentVolumeClaim>::namespaced(state.client.clone(), ns)
-                .list(&ListParams::default())
-                .await?
-        }
-        None => {
-            Api::<PersistentVolumeClaim>::all(state.client.clone())
-                .list(&ListParams::default())
-                .await?
-        }
-    };
-    Ok(list
-        .items
+    let items = list_objects::<PersistentVolumeClaim>(state, namespace).await?;
+    Ok(items
         .into_iter()
         .map(|obj| {
             let phase = obj
@@ -235,20 +234,8 @@ async fn list_configmaps(
     state: &ApiState,
     namespace: Option<&str>,
 ) -> ApiResult<Vec<InventoryItem>> {
-    let list = match namespace.filter(|ns| !ns.is_empty()) {
-        Some(ns) => {
-            Api::<ConfigMap>::namespaced(state.client.clone(), ns)
-                .list(&ListParams::default())
-                .await?
-        }
-        None => {
-            Api::<ConfigMap>::all(state.client.clone())
-                .list(&ListParams::default())
-                .await?
-        }
-    };
-    Ok(list
-        .items
+    let items = list_objects::<ConfigMap>(state, namespace).await?;
+    Ok(items
         .into_iter()
         .map(|obj| {
             let keys = obj.data.as_ref().map(|d| d.len()).unwrap_or(0)
@@ -263,32 +250,18 @@ async fn list_configmaps(
         .collect())
 }
 
+/// Metadata-only listing: Secret `.data` never enters process memory.
 async fn list_secrets(state: &ApiState, namespace: Option<&str>) -> ApiResult<Vec<InventoryItem>> {
-    let list = match namespace.filter(|ns| !ns.is_empty()) {
-        Some(ns) => {
-            Api::<Secret>::namespaced(state.client.clone(), ns)
-                .list(&ListParams::default())
-                .await?
-        }
-        None => {
-            Api::<Secret>::all(state.client.clone())
-                .list(&ListParams::default())
-                .await?
-        }
-    };
-    Ok(list.items.into_iter().map(secret_metadata_only).collect())
+    let items = list_object_metadata::<Secret>(state, namespace).await?;
+    Ok(items.into_iter().map(secret_from_partial_meta).collect())
 }
 
-/// Metadata-only Secret row: never include `.data` values.
-fn secret_metadata_only(obj: Secret) -> InventoryItem {
-    let secret_type = obj.type_.clone().unwrap_or_else(|| "Opaque".to_string());
-    let keys = obj.data.as_ref().map(|d| d.len()).unwrap_or(0)
-        + obj.string_data.as_ref().map(|d| d.len()).unwrap_or(0);
+fn secret_from_partial_meta(obj: PartialObjectMeta<Secret>) -> InventoryItem {
     InventoryItem {
         kind: "Secret".to_string(),
         name: obj.name_any(),
         namespace: object_namespace(&obj),
-        extra: Some(format!("{secret_type}, {keys} keys")),
+        extra: None,
     }
 }
 
@@ -296,7 +269,6 @@ fn secret_metadata_only(obj: Secret) -> InventoryItem {
 mod tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use std::collections::BTreeMap;
 
     #[test]
     fn resolve_kinds_rejects_unknown() {
@@ -335,29 +307,22 @@ mod tests {
     }
 
     #[test]
-    fn secret_row_exposes_key_count_not_values() {
-        let mut data = BTreeMap::new();
-        data.insert(
-            "password".to_string(),
-            k8s_openapi::ByteString(b"s3cret".to_vec()),
-        );
-        let secret = Secret {
+    fn secret_row_is_metadata_only() {
+        let meta = PartialObjectMeta::<Secret> {
+            types: None,
             metadata: ObjectMeta {
                 name: Some("db".into()),
                 namespace: Some("demo".into()),
                 ..Default::default()
             },
-            type_: Some("Opaque".into()),
-            data: Some(data),
             ..Default::default()
         };
-        let item = secret_metadata_only(secret);
-        let json = serde_json::to_string(&item);
-        assert!(json.is_ok(), "serialize inventory item");
-        if let Ok(json) = json {
-            assert!(json.contains("1 keys"));
-            assert!(!json.contains("s3cret"));
-            assert!(!json.contains("password"));
-        }
+        let item = secret_from_partial_meta(meta);
+        let json = serde_json::to_string(&item).expect("serialize inventory item");
+        assert!(json.contains("\"name\":\"db\""));
+        assert!(!json.contains("data"));
+        assert!(!json.contains("s3cret"));
+        assert!(!json.contains("password"));
+        assert_eq!(item.extra, None);
     }
 }

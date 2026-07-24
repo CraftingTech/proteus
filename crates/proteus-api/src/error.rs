@@ -24,9 +24,6 @@ pub enum ApiError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
-    #[error("not ready")]
-    NotReady,
-
     #[error("kubernetes error: {0}")]
     Kubernetes(#[from] kube::Error),
 
@@ -38,7 +35,6 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            ApiError::NotReady => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::Kubernetes(_) => StatusCode::BAD_GATEWAY,
             ApiError::Internal(_) | ApiError::Bind { .. } | ApiError::Serve { .. } => {
                 StatusCode::INTERNAL_SERVER_ERROR
