@@ -90,3 +90,48 @@ pub async fn list_backups() -> Result<Vec<BackupListItem>, ApiClientError> {
 pub async fn list_restores() -> Result<Vec<RestoreListItem>, ApiClientError> {
     get_json("/api/v1/restores").await
 }
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryItem {
+    pub kind: String,
+    pub name: String,
+    pub namespace: String,
+    pub extra: Option<String>,
+}
+
+pub async fn get_inventory(
+    namespace: Option<&str>,
+    kind: Option<&str>,
+    q: Option<&str>,
+) -> Result<Vec<InventoryItem>, ApiClientError> {
+    let mut params = Vec::new();
+    if let Some(ns) = namespace.filter(|s| !s.is_empty()) {
+        params.push(format!("namespace={}", urlencoding_lite(ns)));
+    }
+    if let Some(kind) = kind.filter(|s| !s.is_empty() && *s != "All") {
+        params.push(format!("kind={}", urlencoding_lite(kind)));
+    }
+    if let Some(q) = q.filter(|s| !s.is_empty()) {
+        params.push(format!("q={}", urlencoding_lite(q)));
+    }
+    let path = if params.is_empty() {
+        "/api/v1/inventory".to_string()
+    } else {
+        format!("/api/v1/inventory?{}", params.join("&"))
+    };
+    get_json(&path).await
+}
+
+fn urlencoding_lite(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}

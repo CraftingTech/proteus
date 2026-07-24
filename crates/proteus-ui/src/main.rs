@@ -3,7 +3,7 @@ mod pages;
 mod shell;
 
 use dioxus::prelude::*;
-use pages::{Backups, Cluster, Pvcs, Repositories};
+use pages::{Backups, Cluster, Inventory, Repositories};
 use shell::Shell;
 
 const STYLES: Asset = asset!("/assets/styles.css");
@@ -22,8 +22,8 @@ enum Route {
       Repositories {},
       #[route("/backups")]
       Backups {},
-      #[route("/pvcs")]
-      Pvcs {},
+      #[route("/inventory")]
+      Inventory {},
 }
 
 #[component]
