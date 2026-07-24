@@ -37,8 +37,9 @@ flowchart LR
 
 ## Gotchas
 
-- S3 backend returns `CoreError::S3NotImplemented` until wired
+- S3 CAS uses `object_store` (MinIO-compatible); reconcile probes with `list` under prefix
 - Build UI with `just build-ui` before embedding real assets
 - Host `cargo test/clippy --workspace` should `--exclude proteus-ui` (WASM target); prefer `just check`
 - `PROTEUS_API_ADDR` defaults to `0.0.0.0:8080`
 - Day-to-day commands: root `Justfile` (`just run`, `just deploy`, `just pf`)
+- S3 credentials Secret keys: `accessKeyId`/`secretAccessKey` (or AWS_/snake_case aliases); see `deploy/README.md`

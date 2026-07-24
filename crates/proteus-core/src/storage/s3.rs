@@ -6,7 +6,9 @@ use bytes::Bytes;
 use futures::StreamExt;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path as ObjectPath;
-use object_store::ObjectStore as _;
+use object_store::{
+    Error as OsError, ObjectStore as OsObjectStore, PutMode, PutOptions as OsPutOptions,
+};
 use zeroize::Zeroizing;
 
 use super::traits::{ObjectStore, PutOptions, StoredObject};
@@ -61,10 +63,18 @@ pub fn credentials_from_secret_data(data: &HashMap<String, String>) -> CoreResul
     ))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct S3Backend {
     config: S3Config,
-    store: Arc<AmazonS3>,
+    store: Arc<dyn OsObjectStore>,
+}
+
+impl std::fmt::Debug for S3Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Backend")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl S3Backend {
@@ -85,7 +95,7 @@ impl S3Backend {
             builder = builder.with_endpoint(endpoint);
         }
 
-        let store = builder
+        let store: AmazonS3 = builder
             .build()
             .map_err(|err| CoreError::S3(format!("failed to build S3 client: {err}")))?;
 
@@ -93,6 +103,11 @@ impl S3Backend {
             config,
             store: Arc::new(store),
         })
+    }
+
+    /// Build against any object-store implementation (unit tests / alternate backends).
+    pub fn with_store(config: S3Config, store: Arc<dyn OsObjectStore>) -> Self {
+        Self { config, store }
     }
 
     pub fn bucket(&self) -> &str {
@@ -111,6 +126,17 @@ impl S3Backend {
                 }
             }
             _ => format!("{hex}.blob"),
+        }
+    }
+
+    fn object_path(&self, id: &ContentId) -> ObjectPath {
+        ObjectPath::from(self.object_key(id))
+    }
+
+    fn map_err(err: OsError) -> CoreError {
+        match &err {
+            OsError::NotFound { path, .. } => CoreError::NotFound(path.clone()),
+            other => CoreError::S3(other.to_string()),
         }
     }
 
@@ -135,59 +161,94 @@ impl S3Backend {
 
 #[async_trait]
 impl ObjectStore for S3Backend {
-    async fn put(
-        &self,
-        _id: &ContentId,
-        _data: Bytes,
-        _opts: PutOptions,
-    ) -> CoreResult<StoredObject> {
-        Err(CoreError::S3NotImplemented(format!(
-            "put into bucket {}",
-            self.config.bucket
-        )))
+    async fn put(&self, id: &ContentId, data: Bytes, opts: PutOptions) -> CoreResult<StoredObject> {
+        let path = self.object_path(id);
+        let size = data.len() as u64;
+
+        if opts.skip_if_exists {
+            match self.store.head(&path).await {
+                Ok(meta) => {
+                    return Ok(StoredObject {
+                        id: id.clone(),
+                        size: meta.size,
+                        deduplicated: true,
+                    });
+                }
+                Err(OsError::NotFound { .. }) => {}
+                Err(err) => return Err(Self::map_err(err)),
+            }
+        }
+
+        let put_opts = OsPutOptions {
+            mode: if opts.skip_if_exists {
+                PutMode::Create
+            } else {
+                PutMode::Overwrite
+            },
+            ..OsPutOptions::default()
+        };
+
+        match self.store.put_opts(&path, data.into(), put_opts).await {
+            Ok(_) => Ok(StoredObject {
+                id: id.clone(),
+                size,
+                deduplicated: false,
+            }),
+            Err(OsError::AlreadyExists { .. }) if opts.skip_if_exists => {
+                let meta = self.store.head(&path).await.map_err(Self::map_err)?;
+                Ok(StoredObject {
+                    id: id.clone(),
+                    size: meta.size,
+                    deduplicated: true,
+                })
+            }
+            Err(err) => Err(Self::map_err(err)),
+        }
     }
 
     async fn get(&self, id: &ContentId) -> CoreResult<Bytes> {
-        Err(CoreError::S3NotImplemented(format!(
-            "get {id} from bucket {}",
-            self.config.bucket
-        )))
+        let path = self.object_path(id);
+        let result = self.store.get(&path).await.map_err(Self::map_err)?;
+        let bytes = result.bytes().await.map_err(Self::map_err)?;
+        Ok(bytes)
     }
 
     async fn exists(&self, id: &ContentId) -> CoreResult<bool> {
-        Err(CoreError::S3NotImplemented(format!(
-            "exists {id} in bucket {}",
-            self.config.bucket
-        )))
+        let path = self.object_path(id);
+        match self.store.head(&path).await {
+            Ok(_) => Ok(true),
+            Err(OsError::NotFound { .. }) => Ok(false),
+            Err(err) => Err(Self::map_err(err)),
+        }
     }
 
     async fn delete(&self, id: &ContentId) -> CoreResult<()> {
-        Err(CoreError::S3NotImplemented(format!(
-            "delete {id} from bucket {}",
-            self.config.bucket
-        )))
+        let path = self.object_path(id);
+        match self.store.delete(&path).await {
+            Ok(()) => Ok(()),
+            Err(OsError::NotFound { .. }) => Ok(()),
+            Err(err) => Err(Self::map_err(err)),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::hash_bytes;
+    use object_store::memory::InMemory;
 
-    fn test_backend(prefix: Option<&str>) -> S3Backend {
-        S3Backend::new(
+    fn memory_backend(prefix: Option<&str>) -> S3Backend {
+        S3Backend::with_store(
             S3Config {
-                bucket: "b".into(),
+                bucket: "test".into(),
                 prefix: prefix.map(str::to_string),
-                endpoint: Some("http://127.0.0.1:9000".into()),
+                endpoint: None,
                 region: Some("us-east-1".into()),
                 force_path_style: true,
             },
-            S3Credentials {
-                access_key_id: Zeroizing::new("a".into()),
-                secret_access_key: Zeroizing::new("s".into()),
-            },
+            Arc::new(InMemory::new()),
         )
-        .expect("build")
     }
 
     #[test]
@@ -218,7 +279,7 @@ mod tests {
 
     #[test]
     fn object_key_honours_prefix() {
-        let backend = test_backend(Some("cas/"));
+        let backend = memory_backend(Some("cas/"));
         let id =
             ContentId::from_hex("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
                 .expect("hex");
@@ -226,5 +287,99 @@ mod tests {
             backend.object_key(&id),
             "cas/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.blob"
         );
+    }
+
+    #[tokio::test]
+    async fn put_get_round_trip() {
+        let store = memory_backend(Some("cas"));
+        let data = Bytes::from_static(b"s3-cas-bytes");
+        let id = hash_bytes(&data);
+        store
+            .put(&id, data.clone(), PutOptions::default())
+            .await
+            .expect("put");
+        let got = store.get(&id).await.expect("get");
+        assert_eq!(got, data);
+        assert!(store.exists(&id).await.expect("exists"));
+    }
+
+    #[tokio::test]
+    async fn skip_if_exists_deduplicates() {
+        let store = memory_backend(None);
+        let data = Bytes::from_static(b"dup");
+        let id = hash_bytes(&data);
+        store
+            .put(&id, data.clone(), PutOptions::default())
+            .await
+            .expect("put");
+        let second = store
+            .put(
+                &id,
+                data,
+                PutOptions {
+                    skip_if_exists: true,
+                },
+            )
+            .await
+            .expect("dedup put");
+        assert!(second.deduplicated);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_object() {
+        let store = memory_backend(None);
+        let data = Bytes::from_static(b"bye");
+        let id = hash_bytes(&data);
+        store
+            .put(&id, data, PutOptions::default())
+            .await
+            .expect("put");
+        store.delete(&id).await.expect("delete");
+        assert!(!store.exists(&id).await.expect("exists"));
+    }
+
+    #[tokio::test]
+    async fn get_missing_maps_not_found() {
+        let store = memory_backend(None);
+        let id = hash_bytes(b"missing");
+        let err = store.get(&id).await.expect_err("missing");
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    /// Optional live MinIO smoke: set PROTEUS_S3_ENDPOINT (and optional key/secret/bucket).
+    #[tokio::test]
+    async fn live_minio_round_trip_when_configured() {
+        let Ok(endpoint) = std::env::var("PROTEUS_S3_ENDPOINT") else {
+            return;
+        };
+        let access = std::env::var("PROTEUS_S3_ACCESS_KEY").unwrap_or_else(|_| "minio".into());
+        let secret = std::env::var("PROTEUS_S3_SECRET_KEY").unwrap_or_else(|_| "minio123".into());
+        let bucket = std::env::var("PROTEUS_S3_BUCKET").unwrap_or_else(|_| "proteus".into());
+
+        let backend = S3Backend::new(
+            S3Config {
+                bucket,
+                prefix: Some("cas-test".into()),
+                endpoint: Some(endpoint),
+                region: Some("us-east-1".into()),
+                force_path_style: true,
+            },
+            S3Credentials {
+                access_key_id: Zeroizing::new(access),
+                secret_access_key: Zeroizing::new(secret),
+            },
+        )
+        .expect("client");
+
+        backend.probe().await.expect("probe");
+        let data = Bytes::from_static(b"minio-live");
+        let id = hash_bytes(&data);
+        backend
+            .put(&id, data.clone(), PutOptions::default())
+            .await
+            .expect("put");
+        let got = backend.get(&id).await.expect("get");
+        assert_eq!(got, data);
+        backend.delete(&id).await.expect("delete");
     }
 }
