@@ -6,7 +6,8 @@ The version-control conventions this project follows: branches, commits, and the
 
 - Main branch: `main`
 - Platform: GitHub (`CraftingTech/proteus`)
-- Ticketing: none formalized yet
+- Ticketing: GitHub Issues
+- CI: `.github/workflows/check.yml` gates PRs with `just check`
 
 ## Branches
 

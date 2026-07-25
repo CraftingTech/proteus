@@ -22,3 +22,9 @@ How the project is tested: the layers, the tools, and the conventions. Where tes
 
 - All: `cargo test --workspace`
 - One crate: `cargo test -p proteus-core`
+- Pre-merge gate: `just check` (fmt + clippy + tests + UI build)
+
+## CI
+
+- GitHub Actions: `.github/workflows/check.yml` runs `just check` on pull requests and pushes to `main`
+- Toolchain pinned to Rust `1.91.1` + `dioxus-cli` `0.7.9` (same as `deploy/Dockerfile` / CONTRIBUTING)
