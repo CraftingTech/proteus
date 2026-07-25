@@ -22,7 +22,7 @@ flowchart LR
   CTRL --> K8S[Single-cluster K8s API / PVCs]
   CORE --> LOCAL[Local FS backend]
   CORE -.-> S3[S3 backend]
-  KUST[deploy/kustomize] --> CTRL
+  KUST[deploy Kustomize] --> CTRL
 ```
 
 ## Key decisions

@@ -29,7 +29,8 @@ See `just --list` for the full recipe set.
 2. Prefer Conventional Commits: `feat(core): …`, `fix(crd): …`, etc.
 3. Include tests when changing CAS / crypto / reconcile behavior
 4. Update docs or `aidd_docs/memory/` when you change purpose, architecture, or public contracts
-5. CI runs `just check` on every PR (`.github/workflows/check.yml`); keep that green before merge
+5. CI runs `just check` + `kubectl kustomize deploy/overlays/default` on every PR; keep that green before merge
+6. Images publish from `main` / tags via `.github/workflows/image.yml` (no Helm — Kustomize only)
 
 ## Project docs
 

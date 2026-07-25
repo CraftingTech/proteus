@@ -7,7 +7,7 @@ The version-control conventions this project follows: branches, commits, and the
 - Main branch: `main`
 - Platform: GitHub (`CraftingTech/proteus`)
 - Ticketing: GitHub Issues
-- CI: `.github/workflows/check.yml` gates PRs with `just check`
+- CI: `.github/workflows/check.yml` gates PRs with `just check` + kustomize render; `.github/workflows/image.yml` publishes GHCR images from `main` / tags
 
 ## Branches
 

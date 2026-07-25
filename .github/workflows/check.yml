@@ -46,3 +46,21 @@ jobs:
 
       - name: just check
         run: just check
+
+  kustomize:
+    name: kustomize build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Render install package
+        run: kubectl kustomize deploy/overlays/default > /tmp/proteus.yaml
+
+      - name: Sanity check rendered manifests
+        run: |
+          grep -q 'kind: Deployment' /tmp/proteus.yaml
+          grep -q 'ghcr.io/craftingtech/proteus-controller:' /tmp/proteus.yaml
+          grep -q 'proteusbackups.proteus.io' /tmp/proteus.yaml
