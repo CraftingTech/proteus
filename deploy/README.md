@@ -1,8 +1,27 @@
 # Deploy Proteus
 
-All of this is also available via the root [`Justfile`](../Justfile) (`just deploy`, `just image`, `just pf`, `just crds`).
+Kustomize-only install package (no Helm). Local recipes live in the root [`Justfile`](../Justfile)
+(`just deploy`, `just image`, `just pf`, `just crds`).
+
+## Layout
+
+```
+deploy/
+├── Dockerfile
+├── kustomization.yaml       # product root → ./base
+├── base/                    # namespace, RBAC, Deployment, Service, CRDs
+├── crds/                    # generated CRD YAML
+├── overlays/
+│   └── default/             # pinned image tag (recommended install path)
+└── examples/
+```
 
 ## Container image
+
+Published by CI to **`ghcr.io/craftingtech/proteus-controller`** (`linux/amd64` + `linux/arm64`)
+on pushes to `main` and on git tags `v*`.
+
+Local build:
 
 ```bash
 just image
@@ -16,11 +35,20 @@ Backups stream PVC data via a short-lived mount Pod + kube exec `tar` into the o
 
 ## Install with Kustomize
 
+Official path (pinned tag in the overlay):
+
 ```bash
 just deploy
 # or:
-kubectl apply -k deploy/kustomize/overlays/default
+kubectl apply -k deploy/overlays/default
 ```
+
+`deploy/` (root) also builds without the overlay pin — use `overlays/default` unless you set the
+image yourself.
+
+Pin / bump the tag in [`overlays/default/kustomization.yaml`](overlays/default/kustomization.yaml)
+`images[].newTag`. Local-repo data uses `emptyDir` at `/var/lib/proteus`; replace with a PVC for
+persistence.
 
 Port-forward the UI:
 
@@ -37,7 +65,42 @@ Types live in `crates/proteus-crd`. After changing them:
 just crds
 ```
 
-This overwrites YAML under `deploy/kustomize/crds/` from `kube::CustomResourceExt`.
+This overwrites YAML under `deploy/crds/` from `kube::CustomResourceExt`.
+
+## GitOps consumption (no Helm)
+
+Proteus ships only Kustomize. Consumers can pick either mode:
+
+### A — Remote (Argo points at this repo)
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: proteus
+  namespace: platform
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/CraftingTech/proteus.git
+    targetRevision: main
+    path: deploy/overlays/default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: proteus-system
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+```
+
+### B — Vendor (copy into your GitOps repo)
+
+Copy `deploy/` (or subtree) into your cluster repo, pin `images[].newTag` to a GHCR digest/tag
+you trust, then point Argo at **your** path. Same manifests; your repo owns the sync cadence.
+
+Ingress (e.g. Tailscale) is intentionally **not** in this package — add it in a consumer overlay.
 
 ## Sample resources
 
@@ -58,7 +121,7 @@ volume in the target namespace with the same name the backup used, then create t
 
 No RBAC changes were needed for restores: the controller already has `pods`/`pods/exec` (create,
 exec, delete on a short-lived mount Pod) and `persistentvolumeclaims` `get/list/watch` from the
-backup path (`deploy/kustomize/base/clusterrole.yaml`) — restore only needs to read/exec Pods and
+backup path (`deploy/base/clusterrole.yaml`) — restore only needs to read/exec Pods and
 read the target PVC's existence, never create or patch it.
 
 ## S3-compatible credentials Secret
@@ -108,7 +171,7 @@ From the UI, check "Encrypt at rest" when creating a repository — Proteus gene
 repository, so it's GC'd with it). `spec.encryptionSecretRef` is set to that Secret automatically.
 
 To bring your own key instead, create the Secret yourself and pass its name as
-`encryptionSecretRef` when creating the repository (via the API — the create call validates the
+`encryptionSecretRef` when creating a repository (via the API — the create call validates the
 Secret exists and contains a usable key before creating the CR):
 
 | Secret key | Accepted value |

@@ -1,0 +1,8 @@
+# Proteus install package (product root).
+# Prefer overlays/default for a pinned image tag:
+#   kubectl apply -k deploy/overlays/default
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ./base

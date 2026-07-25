@@ -23,7 +23,7 @@ flowchart TD
 
 - `crates/proteus-controller/src/main.rs` — operator + embedded API/UI
 - `crates/proteus-ui/src/main.rs` — Dioxus WASM UI
-- `deploy/kustomize/overlays/default` — cluster install
+- `deploy/overlays/default` — cluster install (Kustomize)
 
 ## Packages
 

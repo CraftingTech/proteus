@@ -17,7 +17,7 @@ default_kubeconfig := home / ".kube/config"
 kubeconfig := env_var_or_default("KUBECONFIG", default_kubeconfig)
 
 image := env_var_or_default("PROTEUS_IMAGE", "proteus-controller:local")
-kustomize := "deploy/kustomize/overlays/default"
+kustomize := "deploy/overlays/default"
 namespace := "proteus-system"
 
 default:
@@ -68,9 +68,9 @@ ui:
 
 # --- CRDs -------------------------------------------------------------------
 
-# Regenerate deploy/kustomize/crds from Rust types
+# Regenerate deploy/crds from Rust types
 crds:
-    cargo run -q -p proteus-crd --bin proteus-crdgen -- deploy/kustomize/crds
+    cargo run -q -p proteus-crd --bin proteus-crdgen -- deploy/crds
 
 # Apply CRDs to the current kube context and wait until Established
 ensure-crds kubeconfig=kubeconfig: crds
@@ -82,7 +82,7 @@ ensure-crds kubeconfig=kubeconfig: crds
       exit 1
     fi
     echo "Applying CRDs (kubeconfig: $KUBECONFIG)"
-    kubectl apply -k deploy/kustomize/crds
+    kubectl apply -k deploy/crds
     for crd in \
       proteusrepositories.proteus.io \
       proteusbackups.proteus.io \
@@ -103,7 +103,7 @@ cleanup kubeconfig=kubeconfig:
     fi
     echo "Cleaning Proteus from cluster (kubeconfig: $KUBECONFIG)"
     kubectl delete -f deploy/examples/sample-resources.yaml --ignore-not-found
-    kubectl delete -k deploy/kustomize/crds --ignore-not-found
+    kubectl delete -k deploy/crds --ignore-not-found
     echo "Cleanup done"
 
 # --- run locally ------------------------------------------------------------

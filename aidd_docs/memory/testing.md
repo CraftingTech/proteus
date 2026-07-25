@@ -22,3 +22,12 @@ How the project is tested: the layers, the tools, and the conventions. Where tes
 
 - All: `cargo test --workspace`
 - One crate: `cargo test -p proteus-core`
+- Pre-merge gate: `just check` (fmt + clippy + tests + UI build)
+
+## CI
+
+- `.github/workflows/check.yml` (PR + `main`):
+  - `just check` (fmt + clippy + tests + UI build)
+  - `kubectl kustomize deploy/overlays/default` (install package must render)
+- `.github/workflows/image.yml` (`main` + tags `v*`): multi-arch build/push to `ghcr.io/craftingtech/proteus-controller`
+- Toolchain pinned to Rust `1.91.1` + `dioxus-cli` `0.7.9` (same as `deploy/Dockerfile` / CONTRIBUTING)

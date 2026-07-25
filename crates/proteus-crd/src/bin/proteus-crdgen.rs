@@ -8,7 +8,7 @@ fn main() {
     let out_dir = std::env::args()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("deploy/kustomize/crds"));
+        .unwrap_or_else(|| PathBuf::from("deploy/crds"));
 
     if let Err(err) = fs::create_dir_all(&out_dir) {
         eprintln!("create_dir_all {}: {err}", out_dir.display());
