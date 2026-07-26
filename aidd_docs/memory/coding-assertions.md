@@ -4,7 +4,19 @@ The checks that must pass for code to count as done — and the craft standard b
 
 ## Craft (non-negotiable)
 
-We follow the spirit of Clean Code (Uncle Bob), Refactoring / patterns (Martin Fowler), and GoF where a pattern earns its keep:
+We follow **Clean Code** (Uncle Bob), **SOLID**, Refactoring / patterns (Martin Fowler), and GoF where a pattern earns its keep. These are review and merge criteria, not aspirations.
+
+### SOLID (required)
+
+| Principle | Expectation |
+| --------- | ----------- |
+| **S** — Single Responsibility | One reason to change per type/module; no god files or mixed concerns. |
+| **O** — Open/Closed | Extend via new types/traits; avoid editing cores for every variant. |
+| **L** — Liskov Substitution | Trait impls honor the contract; no surprise failures or weaker invariants. |
+| **I** — Interface Segregation | Narrow traits; callers must not depend on methods they do not use. |
+| **D** — Dependency Inversion | Depend on abstractions (`trait`s); wire concretes at the edge. |
+
+### Clean Code
 
 - **Names over comments.** If you need a paragraph to explain a block, rename, extract, or simplify.
 - **Comments explain *why*, never *what*.** No narrating the next line. No module essays.

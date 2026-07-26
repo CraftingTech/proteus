@@ -15,12 +15,19 @@ You are working in **Proteus**, a lightweight Kube-native backup & disaster-reco
 - MVP: embedded UI, PVC-centric backups, single cluster; install via image and/or Kustomize.
 - **100% Rust** including UI (Dioxus WASM). No Node/React/Vite application code.
 
-## Craft (Clean Code / Fowler / GoF)
+## Craft (Clean Code + SOLID / Fowler / GoF) — non-negotiable
 
+SOLID and Clean Code are review/merge criteria, not optional style.
+
+- **S** Single Responsibility — one reason to change per type/module; no god files.
+- **O** Open/Closed — extend via traits/new types; avoid editing cores for every variant.
+- **L** Liskov — trait impls honor the contract; no surprise weaker invariants.
+- **I** Interface Segregation — narrow traits; no fat interfaces callers half-use.
+- **D** Dependency Inversion — depend on abstractions; wire concretes at the edge.
 - Express intent in **names and structure**, not comments.
 - Comments only for non-obvious **why** (trade-offs, invariants, external constraints).
 - Do **not** add `///` on every item. No `#![deny(missing_docs)]`.
-- Prefer small modules and clear types (SRP). Apply GoF patterns only when they remove real duplication or branching pain.
+- Prefer small modules and clear types. Apply GoF patterns only when they remove real duplication or branching pain.
 - Boy Scout rule on every touch.
 
 ## Error handling
