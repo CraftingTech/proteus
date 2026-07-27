@@ -86,40 +86,8 @@ impl LocalBackend {
         let (prefix, _) = hex.split_at(2);
         self.root.join(prefix).join(format!("{hex}.blob"))
     }
-}
 
-#[async_trait]
-impl ObjectStore for LocalBackend {
-    async fn put(&self, id: &ContentId, data: Bytes, opts: PutOptions) -> CoreResult<StoredObject> {
-        let path = self.object_path(id);
-
-        if opts.skip_if_exists {
-            match fs::try_exists(&path).await {
-                Ok(true) => {
-                    let size = fs::metadata(&path)
-                        .await
-                        .map_err(|source| CoreError::LocalIo {
-                            path: path.clone(),
-                            source,
-                        })?
-                        .len();
-                    debug!(%id, "deduplicated local put");
-                    return Ok(StoredObject {
-                        id: id.clone(),
-                        size,
-                        deduplicated: true,
-                    });
-                }
-                Ok(false) => {}
-                Err(source) => {
-                    return Err(CoreError::LocalIo {
-                        path: path.clone(),
-                        source,
-                    });
-                }
-            }
-        }
-
+    async fn ensure_parent(&self, path: &std::path::Path) -> CoreResult<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .await
@@ -128,7 +96,71 @@ impl ObjectStore for LocalBackend {
                     source,
                 })?;
         }
+        Ok(())
+    }
 
+    async fn existing_object(&self, id: &ContentId, path: &PathBuf) -> CoreResult<StoredObject> {
+        let size = fs::metadata(path)
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: path.clone(),
+                source,
+            })?
+            .len();
+        debug!(%id, "deduplicated local put");
+        Ok(StoredObject {
+            id: id.clone(),
+            size,
+            deduplicated: true,
+        })
+    }
+
+    /// Crash-safe exclusive create: write a unique tmp, then `hard_link` into place.
+    /// `hard_link` fails with `AlreadyExists` if the blob appeared concurrently (like S3 Create).
+    async fn put_exclusive(
+        &self,
+        id: &ContentId,
+        path: &PathBuf,
+        data: Bytes,
+    ) -> CoreResult<StoredObject> {
+        let nonce: u64 = rand::random();
+        let tmp = path.with_extension(format!("blob.tmp.{nonce}"));
+        fs::write(&tmp, &data)
+            .await
+            .map_err(|source| CoreError::LocalIo {
+                path: tmp.clone(),
+                source,
+            })?;
+
+        match fs::hard_link(&tmp, path).await {
+            Ok(()) => {
+                let _ = fs::remove_file(&tmp).await;
+                Ok(StoredObject {
+                    id: id.clone(),
+                    size: data.len() as u64,
+                    deduplicated: false,
+                })
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&tmp).await;
+                self.existing_object(id, path).await
+            }
+            Err(source) => {
+                let _ = fs::remove_file(&tmp).await;
+                Err(CoreError::LocalIo {
+                    path: path.clone(),
+                    source,
+                })
+            }
+        }
+    }
+
+    async fn put_overwrite(
+        &self,
+        id: &ContentId,
+        path: &PathBuf,
+        data: Bytes,
+    ) -> CoreResult<StoredObject> {
         let tmp = path.with_extension("blob.tmp");
         fs::write(&tmp, &data)
             .await
@@ -136,7 +168,7 @@ impl ObjectStore for LocalBackend {
                 path: tmp.clone(),
                 source,
             })?;
-        fs::rename(&tmp, &path)
+        fs::rename(&tmp, path)
             .await
             .map_err(|source| CoreError::LocalIo {
                 path: path.clone(),
@@ -148,6 +180,31 @@ impl ObjectStore for LocalBackend {
             size: data.len() as u64,
             deduplicated: false,
         })
+    }
+}
+
+#[async_trait]
+impl ObjectStore for LocalBackend {
+    async fn put(&self, id: &ContentId, data: Bytes, opts: PutOptions) -> CoreResult<StoredObject> {
+        let path = self.object_path(id);
+        self.ensure_parent(&path).await?;
+
+        if opts.skip_if_exists {
+            // Fast path (like S3 `head`); exclusive create below is the race-safe authority.
+            match fs::try_exists(&path).await {
+                Ok(true) => return self.existing_object(id, &path).await,
+                Ok(false) => {}
+                Err(source) => {
+                    return Err(CoreError::LocalIo {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            }
+            return self.put_exclusive(id, &path, data).await;
+        }
+
+        self.put_overwrite(id, &path, data).await
     }
 
     async fn get(&self, id: &ContentId) -> CoreResult<Bytes> {
@@ -251,6 +308,85 @@ mod tests {
             .expect("put");
         let got = store.get(&id).await.expect("get");
         assert_eq!(got, data);
+    }
+
+    #[tokio::test]
+    async fn skip_if_exists_deduplicates_without_rewrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LocalBackend::open(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("open");
+        let data = Bytes::from_static(b"dup-local");
+        let id = hash_bytes(&data);
+        let first = store
+            .put(&id, data.clone(), PutOptions::default())
+            .await
+            .expect("first put");
+        assert!(!first.deduplicated);
+
+        let path = store.object_path(&id);
+        let mtime_before = std::fs::metadata(&path)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let second = store
+            .put(
+                &id,
+                data.clone(),
+                PutOptions {
+                    skip_if_exists: true,
+                },
+            )
+            .await
+            .expect("dedup put");
+        assert!(second.deduplicated);
+        assert_eq!(second.size, data.len() as u64);
+
+        let mtime_after = std::fs::metadata(&path)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        assert_eq!(mtime_before, mtime_after);
+        assert_eq!(store.get(&id).await.expect("get"), data);
+    }
+
+    #[tokio::test]
+    async fn concurrent_skip_if_exists_does_not_corrupt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LocalBackend::open(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("open");
+        let data = Bytes::from_static(b"race-safe-cas-blob");
+        let id = hash_bytes(&data);
+        let opts = PutOptions {
+            skip_if_exists: true,
+        };
+
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let store = store.clone();
+            let data = data.clone();
+            let id = id.clone();
+            handles.push(tokio::spawn(async move {
+                store.put(&id, data, opts).await.expect("put")
+            }));
+        }
+
+        let mut saw_write = false;
+        let mut saw_dedup = false;
+        for handle in handles {
+            let stored = handle.await.expect("join");
+            if stored.deduplicated {
+                saw_dedup = true;
+            } else {
+                saw_write = true;
+            }
+        }
+        assert!(saw_write, "at least one put must create the blob");
+        assert!(saw_dedup, "concurrent losers must report deduplicated");
+        assert_eq!(store.get(&id).await.expect("get"), data);
     }
 
     #[tokio::test]

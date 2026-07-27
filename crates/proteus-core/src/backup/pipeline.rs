@@ -8,6 +8,11 @@ use crate::error::{CoreError, CoreResult};
 use crate::hash::{hash_bytes, ContentId};
 use crate::storage::{ObjectStore, PutOptions};
 
+/// Chunk puts use create-if-absent so identical content-addressed blobs dedup under concurrency.
+const CHUNK_PUT: PutOptions = PutOptions {
+    skip_if_exists: true,
+};
+
 /// One volume's raw plaintext bytes, ready to chunk and store.
 pub struct SnapshotInput<'a> {
     pub pvc_name: &'a str,
@@ -49,7 +54,7 @@ pub async fn ingest_volume_backup_with_progress(
             Some(key) => Bytes::from(encrypt(key, &chunk.data)?.blob),
             None => chunk.data,
         };
-        store.put(&chunk.id, payload, PutOptions::default()).await?;
+        store.put(&chunk.id, payload, CHUNK_PUT).await?;
         chunk_ids.push(chunk.id.to_hex());
         if let Some(cb) = on_bytes.as_mut() {
             cb(bytes, bytes_total);
@@ -101,7 +106,7 @@ where
             Some(key) => Bytes::from(encrypt(key, plain)?.blob),
             None => Bytes::copy_from_slice(plain),
         };
-        store.put(&id, payload, PutOptions::default()).await?;
+        store.put(&id, payload, CHUNK_PUT).await?;
         chunk_ids.push(id.to_hex());
         bytes += filled as u64;
         if let Some(cb) = on_bytes.as_mut() {
@@ -218,7 +223,7 @@ pub async fn create_snapshot_with_progress(
                 Some(key) => Bytes::from(encrypt(key, &chunk.data)?.blob),
                 None => chunk.data,
             };
-            store.put(&chunk.id, payload, PutOptions::default()).await?;
+            store.put(&chunk.id, payload, CHUNK_PUT).await?;
             chunk_ids.push(chunk.id.to_hex());
             grand_done += chunk_len;
             if let Some(cb) = on_bytes.as_mut() {
@@ -420,6 +425,40 @@ mod tests {
         let id = ContentId::from_hex(&snapshot.chunk_ids[0]).expect("hex");
         let stored = store.get(&id).await.expect("get");
         assert_eq!(stored.as_ref(), plaintext);
+    }
+
+    #[tokio::test]
+    async fn second_ingest_identical_chunks_does_not_grow_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LocalBackend::open(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("open");
+        let plaintext = b"dedup-me-across-backups";
+
+        ingest_volume_backup(&store, None, "data", plaintext)
+            .await
+            .expect("first ingest");
+        let after_first = store.list_ids().await.expect("list");
+        assert_eq!(after_first.len(), 1);
+
+        ingest_volume_backup(&store, None, "data", plaintext)
+            .await
+            .expect("second ingest");
+        let after_second = store.list_ids().await.expect("list");
+        assert_eq!(after_second.len(), after_first.len());
+
+        let restored = materialize_volume(
+            &store,
+            None,
+            &VolumeSnapshot {
+                pvc_name: "data".into(),
+                bytes: plaintext.len() as u64,
+                chunk_ids: vec![after_first[0].to_hex()],
+            },
+        )
+        .await
+        .expect("materialize");
+        assert_eq!(restored, plaintext);
     }
 
     #[tokio::test]
