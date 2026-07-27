@@ -249,35 +249,11 @@ pub async fn create_snapshot_with_progress(
     Ok((id, total_bytes))
 }
 
-/// Delete a sealed snapshot: every chunk referenced by the manifest, then the manifest itself.
-///
-/// Chunks shared with another snapshot (dedup) are still deleted — MVP has no refcounting.
-/// Missing objects are ignored so delete stays idempotent.
-pub async fn delete_snapshot(store: &dyn ObjectStore, id_hex: &str) -> CoreResult<()> {
-    let manifest = match load_snapshot(store, id_hex).await {
-        Ok(m) => m,
-        Err(CoreError::NotFound(_)) => return Ok(()),
-        Err(err) => return Err(err),
-    };
-
-    for volume in &manifest.volumes {
-        for chunk_id_hex in &volume.chunk_ids {
-            let id = ContentId::from_hex(chunk_id_hex)?;
-            match store.delete(&id).await {
-                Ok(()) | Err(CoreError::NotFound(_)) => {}
-                Err(err) => return Err(err),
-            }
-        }
-    }
-
-    let manifest_id = ContentId::from_hex(id_hex)?;
-    match store.delete(&manifest_id).await {
-        Ok(()) | Err(CoreError::NotFound(_)) => Ok(()),
-        Err(err) => Err(err),
-    }
-}
-
 /// Delete every object in `store` that is not referenced by any of `keep_snapshot_ids`.
+///
+/// This is the only supported reclaim path: mark-and-sweep over live snapshot roots.
+/// Never delete chunks by walking a single manifest — CAS objects may be shared across
+/// snapshots (dedup), and per-snapshot chunk deletes would corrupt surviving backups.
 ///
 /// Used when removing a backup CR: keep snapshots belonging to *other* backups, drop the
 /// deleted one plus any orphan blobs left by older deletes / interrupted runs.
@@ -526,31 +502,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_snapshot_removes_manifest_and_chunks() {
+    async fn gc_empty_keep_removes_snapshot_and_chunks() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = LocalBackend::open(dir.path().to_str().expect("utf8"))
             .await
             .expect("open");
 
         let data = b"delete-me-contents".to_vec();
-        let inputs = vec![SnapshotInput {
-            pvc_name: "data",
-            data: &data,
-        }];
-        let (id, _bytes) =
-            create_snapshot(&store, None, "2026-07-24T00:00:00Z".to_string(), &inputs)
-                .await
-                .expect("create");
+        let (id, _bytes) = create_snapshot(
+            &store,
+            None,
+            "2026-07-24T00:00:00Z".to_string(),
+            &[SnapshotInput {
+                pvc_name: "data",
+                data: &data,
+            }],
+        )
+        .await
+        .expect("create");
         let hex = id.to_hex();
         let manifest = load_snapshot(&store, &hex).await.expect("load");
         let chunk_hex = manifest.volumes[0].chunk_ids[0].clone();
 
-        delete_snapshot(&store, &hex).await.expect("delete");
+        let removed = gc_unreferenced(&store, &[]).await.expect("gc");
+        assert!(removed >= 2);
         assert!(load_snapshot(&store, &hex).await.is_err());
         let chunk_id = ContentId::from_hex(&chunk_hex).expect("hex");
         assert!(store.get(&chunk_id).await.is_err());
         // Idempotent.
-        delete_snapshot(&store, &hex).await.expect("delete again");
+        assert_eq!(gc_unreferenced(&store, &[]).await.expect("gc again"), 0);
+    }
+
+    #[tokio::test]
+    async fn gc_preserves_shared_chunks_when_sibling_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LocalBackend::open(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("open");
+
+        // Identical plaintext => identical CAS chunk ids (dedup).
+        let data = b"shared-cas-payload-for-both-snapshots".to_vec();
+        let (id_a, _) = create_snapshot(
+            &store,
+            None,
+            "2026-07-24T00:00:00Z".to_string(),
+            &[SnapshotInput {
+                pvc_name: "data",
+                data: &data,
+            }],
+        )
+        .await
+        .expect("a");
+        let (id_b, _) = create_snapshot(
+            &store,
+            None,
+            "2026-07-24T01:00:00Z".to_string(),
+            &[SnapshotInput {
+                pvc_name: "data",
+                data: &data,
+            }],
+        )
+        .await
+        .expect("b");
+
+        let chunks_a = load_snapshot(&store, &id_a.to_hex())
+            .await
+            .expect("load a")
+            .volumes[0]
+            .chunk_ids
+            .clone();
+        let chunks_b = load_snapshot(&store, &id_b.to_hex())
+            .await
+            .expect("load b")
+            .volumes[0]
+            .chunk_ids
+            .clone();
+        assert_eq!(chunks_a, chunks_b, "dedup must share chunk ids");
+        assert_ne!(id_a, id_b, "manifests differ by created_at");
+
+        // Drop snapshot A only — shared chunks must remain for B.
+        let removed = gc_unreferenced(&store, &[id_b.to_hex()]).await.expect("gc");
+        assert_eq!(removed, 1, "only A's manifest should be reclaimed");
+        assert!(load_snapshot(&store, &id_a.to_hex()).await.is_err());
+        let manifest_b = load_snapshot(&store, &id_b.to_hex())
+            .await
+            .expect("B still present");
+        let restored = materialize_volume(&store, None, &manifest_b.volumes[0])
+            .await
+            .expect("B still restorable");
+        assert_eq!(restored, data);
     }
 
     #[tokio::test]
