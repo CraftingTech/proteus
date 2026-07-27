@@ -4,7 +4,7 @@ use bytes::Bytes;
 use crate::error::CoreResult;
 use crate::hash::ContentId;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PutOptions {
     pub skip_if_exists: bool,
 }
