@@ -14,17 +14,22 @@ How Proteus is built and shipped to a Kubernetes cluster.
 ```mermaid
 flowchart TD
   IMG[Container image] --> DEP[Deployment proteus-controller]
+  IMG --> DS[DaemonSet proteus-node-agent planned]
   DEP --> SA[ServiceAccount + ClusterRole]
   DEP --> SVC[Service proteus :80]
   SVC --> UI[Embedded UI + API :8080]
   DEP --> CRD[CRDs proteus.io]
-  DEP --> PVC[List PVCs on cluster]
+  DEP --> PVC[Orchestrate PVC backup/restore]
+  DS --> VOL[Node-local volume / CSI data move]
 ```
+
+Controller Deployment is shipping today. **Node-agent DaemonSet** is the accepted production data-plane install shape ([ADR 0001](../adr/0001-production-data-plane.md)); not yet in `deploy/` manifests.
 
 ## Conventions
 
-- Image name default: `ghcr.io/craftingtech/proteus-controller:<tag>`
+- Image name default: `ghcr.io/craftingtech/proteus-controller:<tag>` (controller and future agent modes share this image)
 - Install: `kubectl apply -k deploy/overlays/default`
 - Override image tag in the overlay `images:` field
 - Local repo data path in-cluster: `/var/lib/proteus` (emptyDir in base; replace with PVC for persistence)
 - GitOps: consumers may Argo-source this repo (`path: deploy/overlays/default`) or vendor `deploy/` into their own GitOps repo; Ingress is a consumer overlay
+- Large-PVC throughput: deploy agent (and CSI when testing snapshots); `just run` alone stays exec/fallback
