@@ -31,6 +31,22 @@ What this project is, the problem it solves, and its domain language. The non-de
 - Inventory kinds beyond the v1 set (StatefulSets, Ingress, Jobs, …)
 - File-level browse restore; compression; advanced retention UX; key rotation
 
+## Launch v1 (product) — validated 2026-08-01
+
+First release we call a **product** (post alpha). Full PRD: [`aidd_docs/tasks/2026_08/2026_08_01-proteus-launch-v1-prd.md`](../tasks/2026_08/2026_08_01-proteus-launch-v1-prd.md). GitHub epic: [#68](https://github.com/CraftingTech/proteus/issues/68).
+
+**Must**
+- Coherent brand + SRE-clear UI
+- Easy cron/schedules (+ minimal retention)
+- PVC filesystem backup/restore; snapshot-assisted when cluster allows
+- ConfigMaps + Secrets backup/restore (secrets protected at rest)
+- **One polished S3-compatible** destination UX (MinIO / AWS / R2 / Scaleway-class)
+- Credible **~1 TiB** backup/restore (requires production data plane)
+
+**Launch volume scope:** filesystem PVCs (RWO/RWX) + snapshots when available.
+
+**Wanted later (not forgotten):** ephemeral / hostPath / local-PV edge cases; app-consistent hooks; native GCS / Azure / B2 / etc.; file-level browse restore.
+
 ## Domain language
 
 | Term | Meaning |
