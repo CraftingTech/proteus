@@ -47,7 +47,7 @@ pub async fn reconcile_backup(
     }
 
     if let Err(message) = validate_spec(&obj) {
-        let status = terminal_status(&obj, Err(message));
+        let status = terminal_status(&obj, Err(message), None);
         if status_changed(obj.status.as_ref(), &status) {
             patch_status(&api, &name, &status).await?;
         }
@@ -61,6 +61,8 @@ pub async fn reconcile_backup(
     }
 
     let running = running_status(&obj);
+    // Capture now: `obj` is the reconcile snapshot and will not see this patch.
+    let run_started_at = running.started_at.clone();
     if status_changed(obj.status.as_ref(), &running) {
         if let Err(err) = patch_status(&api, &name, &running).await {
             clear_active(&ctx, &active_key);
@@ -72,7 +74,7 @@ pub async fn reconcile_backup(
     let outcome = crate::backup::run_backup(&obj, &ctx, &ns, progress).await;
     clear_active(&ctx, &active_key);
 
-    let status = terminal_status(&obj, outcome);
+    let status = terminal_status(&obj, outcome, run_started_at.as_deref());
     if status_changed(obj.status.as_ref(), &status) {
         patch_status(&api, &name, &status).await?;
     }
@@ -120,33 +122,55 @@ fn carry_forward(obj: &ProteusBackup) -> ProteusBackupStatus {
 }
 
 fn running_status(obj: &ProteusBackup) -> ProteusBackupStatus {
+    // Resume wall-clock if we are already Running (controller restart mid-backup).
+    let started_at = obj
+        .status
+        .as_ref()
+        .filter(|s| s.phase == Some(BackupPhase::Running))
+        .and_then(|s| s.started_at.clone())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
     ProteusBackupStatus {
         phase: Some(BackupPhase::Running),
         message: Some("backup starting".to_string()),
         progress_percent: Some(0),
-        started_at: Some(Utc::now().to_rfc3339()),
+        started_at: Some(started_at),
+        // Do not surface the previous run's timing while this run is in progress.
+        duration_seconds: None,
+        throughput_bytes_per_sec: None,
         ..carry_forward(obj)
     }
+}
+
+/// Wall-clock duration and approximate B/s from `started_at` → `finished_at`.
+///
+/// Duration is clamped to ≥ 1s so sub-second backups still report a throughput.
+fn compute_throughput(
+    started_at: Option<&str>,
+    bytes: u64,
+    finished_at: chrono::DateTime<Utc>,
+) -> (Option<u64>, Option<u64>) {
+    let duration_seconds = started_at
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|s| {
+            finished_at
+                .signed_duration_since(s.with_timezone(&Utc))
+                .num_seconds()
+                .max(1) as u64
+        });
+    let throughput_bytes_per_sec = duration_seconds.map(|d| bytes / d);
+    (duration_seconds, throughput_bytes_per_sec)
 }
 
 fn terminal_status(
     obj: &ProteusBackup,
     outcome: Result<(String, u64), String>,
+    run_started_at: Option<&str>,
 ) -> ProteusBackupStatus {
     match outcome {
         Ok((snapshot_id, bytes)) => {
-            let started = obj
-                .status
-                .as_ref()
-                .and_then(|s| s.started_at.as_deref())
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
-            let duration_seconds = started.map(|s| {
-                Utc::now()
-                    .signed_duration_since(s.with_timezone(&Utc))
-                    .num_seconds()
-                    .max(1) as u64
-            });
-            let throughput_bytes_per_sec = duration_seconds.map(|d| bytes / d);
+            let finished_at = Utc::now();
+            let (duration_seconds, throughput_bytes_per_sec) =
+                compute_throughput(run_started_at, bytes, finished_at);
             ProteusBackupStatus {
                 phase: Some(BackupPhase::Succeeded),
                 message: Some(match (duration_seconds, throughput_bytes_per_sec) {
@@ -156,9 +180,10 @@ fn terminal_status(
                     _ => format!("backup succeeded ({bytes} bytes)"),
                 }),
                 last_snapshot_id: Some(snapshot_id),
-                last_success_at: Some(Utc::now().to_rfc3339()),
+                last_success_at: Some(finished_at.to_rfc3339()),
                 last_bytes: Some(bytes),
                 progress_percent: Some(100),
+                started_at: run_started_at.map(str::to_string),
                 duration_seconds,
                 throughput_bytes_per_sec,
                 ..carry_forward(obj)
@@ -169,6 +194,9 @@ fn terminal_status(
             message: Some(message),
             last_failure_at: Some(Utc::now().to_rfc3339()),
             progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
+            started_at: run_started_at
+                .map(str::to_string)
+                .or_else(|| obj.status.as_ref().and_then(|s| s.started_at.clone())),
             ..carry_forward(obj)
         },
     }
@@ -271,11 +299,58 @@ mod tests {
     #[test]
     fn terminal_success_sets_snapshot() {
         let b = backup_with(vec!["data".into()]);
-        let status = terminal_status(&b, Ok(("deadbeef".into(), 42)));
+        let started = (Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+        let status = terminal_status(&b, Ok(("deadbeef".into(), 42)), Some(&started));
         assert_eq!(status.phase, Some(BackupPhase::Succeeded));
         assert_eq!(status.last_snapshot_id.as_deref(), Some("deadbeef"));
         assert_eq!(status.last_bytes, Some(42));
         assert_eq!(status.progress_percent, Some(100));
+        assert_eq!(status.started_at.as_deref(), Some(started.as_str()));
+        assert!(status.duration_seconds.is_some_and(|d| d >= 10));
+        assert!(status.throughput_bytes_per_sec.is_some());
+    }
+
+    #[test]
+    fn terminal_success_records_throughput_from_run_start_not_stale_status() {
+        // Reconcile `obj` often still has the pre-Running status (no startedAt).
+        let b = backup_with(vec!["data".into()]);
+        let started = (Utc::now() - chrono::Duration::seconds(5)).to_rfc3339();
+        let status = terminal_status(&b, Ok(("abc".into(), 50_000)), Some(&started));
+        assert_eq!(status.duration_seconds, Some(5));
+        assert_eq!(status.throughput_bytes_per_sec, Some(10_000));
+    }
+
+    #[test]
+    fn compute_throughput_clamps_subsecond_duration() {
+        let started = Utc::now().to_rfc3339();
+        let finished = Utc::now();
+        let (secs, bps) = compute_throughput(Some(&started), 4_096, finished);
+        assert_eq!(secs, Some(1));
+        assert_eq!(bps, Some(4_096));
+    }
+
+    #[test]
+    fn compute_throughput_none_without_started_at() {
+        let (secs, bps) = compute_throughput(None, 100, Utc::now());
+        assert_eq!(secs, None);
+        assert_eq!(bps, None);
+    }
+
+    #[test]
+    fn running_status_preserves_started_at_when_already_running() {
+        let mut b = backup_with(vec!["data".into()]);
+        let prior = "2026-07-01T12:00:00Z".to_string();
+        b.status = Some(ProteusBackupStatus {
+            phase: Some(BackupPhase::Running),
+            started_at: Some(prior.clone()),
+            duration_seconds: Some(99),
+            throughput_bytes_per_sec: Some(1),
+            ..Default::default()
+        });
+        let running = running_status(&b);
+        assert_eq!(running.started_at.as_deref(), Some(prior.as_str()));
+        assert_eq!(running.duration_seconds, None);
+        assert_eq!(running.throughput_bytes_per_sec, None);
     }
 
     #[test]
@@ -286,7 +361,7 @@ mod tests {
             progress_percent: Some(40),
             ..Default::default()
         });
-        let status = terminal_status(&b, Err("boom".into()));
+        let status = terminal_status(&b, Err("boom".into()), None);
         assert_eq!(status.phase, Some(BackupPhase::Failed));
         assert_eq!(status.last_snapshot_id.as_deref(), Some("previous"));
         assert_eq!(status.progress_percent, Some(40));

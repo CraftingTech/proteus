@@ -10,7 +10,7 @@ use kube::{Api, Client};
 use proteus_core::backup::{ingest_volume_stream, VolumeSnapshot};
 use proteus_core::crypto::EncryptionKey;
 use proteus_core::ObjectStore;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, BufReader};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -18,7 +18,10 @@ const MOUNT_IMAGE: &str = "busybox:1.36";
 const MOUNT_CONTAINER: &str = "mount";
 const MOUNT_PATH: &str = "/data";
 const POD_READY_TIMEOUT: Duration = Duration::from_secs(90);
-const POD_READY_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Sub-second poll: mount Pod Ready often lands well under the old 2s sleep.
+const POD_READY_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Amortize tiny kube-exec/WebSocket frames before CAS chunk assembly.
+const EXEC_STDOUT_BUF: usize = 256 * 1024;
 /// Hard cap so a leaked mount Pod cannot sit forever after a controller crash.
 const POD_ACTIVE_DEADLINE_SECS: i64 = 6 * 60 * 60;
 
@@ -171,6 +174,7 @@ where
     let stdout = attached
         .stdout()
         .ok_or_else(|| "exec stream had no stdout".to_string())?;
+    let stdout = BufReader::with_capacity(EXEC_STDOUT_BUF, stdout);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
     let total_for_reporter = total_hint;
