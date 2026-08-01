@@ -21,6 +21,11 @@ deploy/
 Published by CI to **`ghcr.io/craftingtech/proteus-controller`** (`linux/amd64` + `linux/arm64`)
 on pushes to `main` and on git tags `v*`.
 
+CI builds each architecture on a **native** GitHub-hosted runner (`ubuntu-latest` /
+`ubuntu-24.04-arm`), then merges digests into one multi-arch manifest. That avoids
+QEMU emulation (much faster wall-clock) at the cost of ARM Actions minutes. See
+`.github/workflows/image.yml`.
+
 Local build:
 
 ```bash
