@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::snapshot::{SnapshotManifest, VolumeSnapshot, MANIFEST_VERSION};
@@ -70,6 +70,13 @@ pub async fn ingest_volume_backup_with_progress(
 
 /// Stream `reader` into fixed-size CAS chunks without buffering the whole payload.
 ///
+/// Hot-path choices (throughput, not correctness):
+/// - `BytesMut` → `freeze()` so unencrypted puts avoid an extra 1 MiB memcpy per chunk
+/// - pipeline depth 1: `store.put` for chunk N overlaps the read of chunk N+1
+///
+/// Chunk ids stay ordered; CAS `skip_if_exists` keeps parallel-safe dedup. Encryption remains
+/// per-chunk and independent.
+///
 /// `on_bytes`, when set, is called after each chunk with bytes ingested so far (no total).
 pub async fn ingest_volume_stream<R>(
     store: &dyn ObjectStore,
@@ -83,37 +90,32 @@ where
 {
     let mut chunk_ids = Vec::new();
     let mut bytes = 0u64;
-    let mut buf = vec![0u8; DEFAULT_CHUNK_SIZE];
+    let mut next = read_stream_chunk(&mut reader).await?;
 
     loop {
-        let mut filled = 0usize;
-        while filled < buf.len() {
-            let n = reader.read(&mut buf[filled..]).await.map_err(|source| {
-                CoreError::InvalidArgument(format!("volume stream read failed: {source}"))
-            })?;
-            if n == 0 {
-                break;
-            }
-            filled += n;
-        }
-        if filled == 0 {
+        if next.is_empty() {
             break;
         }
 
-        let plain = &buf[..filled];
-        let id = hash_bytes(plain);
+        let plain = next;
+        let chunk_len = plain.len() as u64;
+        let id = hash_bytes(&plain);
         let payload = match key {
-            Some(key) => Bytes::from(encrypt(key, plain)?.blob),
-            None => Bytes::copy_from_slice(plain),
+            Some(key) => Bytes::from(encrypt(key, &plain)?.blob),
+            None => plain,
         };
-        store.put(&id, payload, CHUNK_PUT).await?;
+
+        // Overlap CAS put with filling the next chunk from the (often slow) exec stream.
+        let put = store.put(&id, payload, CHUNK_PUT);
+        let read = read_stream_chunk(&mut reader);
+        let (put_result, read_result) = tokio::join!(put, read);
+        put_result?;
+        next = read_result?;
+
         chunk_ids.push(id.to_hex());
-        bytes += filled as u64;
+        bytes += chunk_len;
         if let Some(cb) = on_bytes.as_mut() {
             cb(bytes);
-        }
-        if filled < buf.len() {
-            break;
         }
     }
 
@@ -122,6 +124,23 @@ where
         bytes,
         chunk_ids,
     })
+}
+
+/// Read up to one CAS chunk from `reader`. Empty `Bytes` means EOF before any byte.
+async fn read_stream_chunk<R>(reader: &mut R) -> CoreResult<Bytes>
+where
+    R: AsyncRead + Unpin + Send,
+{
+    let mut buf = BytesMut::with_capacity(DEFAULT_CHUNK_SIZE);
+    while buf.len() < DEFAULT_CHUNK_SIZE {
+        let n = reader.read_buf(&mut buf).await.map_err(|source| {
+            CoreError::InvalidArgument(format!("volume stream read failed: {source}"))
+        })?;
+        if n == 0 {
+            break;
+        }
+    }
+    Ok(buf.freeze())
 }
 
 /// Ingest one or more volume streams, seal the manifest, return id + total bytes.
@@ -629,6 +648,38 @@ mod tests {
         let restored = materialize_volume(&store, None, &manifest_b.volumes[0])
             .await
             .expect("B still restorable");
+        assert_eq!(restored, data);
+    }
+
+    #[tokio::test]
+    async fn stream_ingest_pipelines_multi_chunk_payload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LocalBackend::open(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("open");
+        // > 1 MiB so the put∥read pipeline runs at least once.
+        let data = vec![0xABu8; DEFAULT_CHUNK_SIZE + 1234];
+        let mut reported = 0u64;
+        let mut on_bytes = |done: u64| {
+            reported = done;
+        };
+
+        let snap = ingest_volume_stream(
+            &store,
+            None,
+            "big",
+            data.as_slice(),
+            Some(&mut on_bytes as &mut (dyn FnMut(u64) + Send)),
+        )
+        .await
+        .expect("stream");
+
+        assert_eq!(snap.bytes, data.len() as u64);
+        assert_eq!(reported, data.len() as u64);
+        assert_eq!(snap.chunk_ids.len(), 2);
+        let restored = materialize_volume(&store, None, &snap)
+            .await
+            .expect("materialize");
         assert_eq!(restored, data);
     }
 
