@@ -20,10 +20,16 @@ flowchart LR
   CR[CRDs proteus-crd] --> CTRL
   CTRL --> CORE[proteus-core CAS]
   CTRL --> K8S[Single-cluster K8s API / PVCs]
+  CTRL -.->|orchestrates| AGENT[node-agent DaemonSet]
+  AGENT --> CORE
+  AGENT --> VOL[Node-local PVC / CSI snapshot data]
   CORE --> LOCAL[Local FS backend]
   CORE -.-> S3[S3 backend]
   KUST[deploy Kustomize] --> CTRL
+  KUST --> AGENT
 ```
+
+Production bulk I/O is intended to run on the **node-agent** (and CSI snapshot path), not through kube-exec into the controller. See [ADR 0001](../adr/0001-production-data-plane.md). Today’s MVP still uses mount-Pod + exec as the implemented path / fallback.
 
 ## Key decisions
 
@@ -32,6 +38,8 @@ flowchart LR
 - Product UX inspired by Kopia; runtime is Kube-native CRs + controller
 - Users install via container image and/or `kubectl apply -k`
 - MVP is single-cluster and PVC-centric
+- **Post-MVP data plane (accepted):** DaemonSet node-agent + CSI VolumeSnapshots; exec is fallback/dev — [ADR 0001](../adr/0001-production-data-plane.md) / epic #66
+- Prefer one image with controller vs agent modes over a second unrelated image
 - Libraries use `thiserror`; only the binary edge uses `anyhow`
 - CRD API group `proteus.io`, version `v1alpha1` until GA
 
