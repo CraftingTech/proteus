@@ -16,6 +16,6 @@ What this project ships as a reusable package: its public surface and release po
 
 ## Versioning
 
-- Single workspace version `0.1.0` for all crates
+- Single workspace version `0.0.1-alpha.1` for all crates (pre-release; not a product GA)
 - Semver: CRD/`v1alpha1` breaking changes allowed without major bump until GA; document CR migrations when they happen
 - Kubernetes API compatibility keyed off `k8s-openapi` feature (`v1_30` today) rather than a separate peer dep for callers

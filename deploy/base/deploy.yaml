@@ -18,7 +18,7 @@ spec:
       serviceAccountName: proteus-controller
       containers:
         - name: controller
-          image: ghcr.io/craftingtech/proteus-controller:0.1.0
+          image: ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.1
           imagePullPolicy: IfNotPresent
           env:
             - name: PROTEUS_API_ADDR
