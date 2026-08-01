@@ -1,4 +1,6 @@
-# Out-of-the-box install: pinned controller image tag.
+# Out-of-the-box install: pin the GHCR semver tag (no leading "v").
+# Must match workspace Cargo.toml version and the image tag CI produces from git tag vX.Y.Z
+# (docker/metadata-action type=semver,pattern={{version}} → X.Y.Z).
 #   kubectl apply -k deploy/overlays/default
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

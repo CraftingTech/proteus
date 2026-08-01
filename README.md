@@ -4,7 +4,7 @@ Kube-native backup and disaster recovery with an embedded operator UI — **100%
 
 Proteus runs as a Kubernetes controller, owns its content-addressable storage (chunking, BLAKE3, AES-256-GCM, compression), and exposes a **Kopia-inspired UI** (Dioxus WASM) to configure backup destinations and drive backup/restore.
 
-> **Status:** early bootstrap (`v0.1.0` / CRDs `v1alpha1`). UI shell + deploy path exist; PVC backup/restore pipelines are not implemented yet.
+> **Status:** MVP (`v0.1.0` / CRDs `v1alpha1`). Install from a pinned GHCR semver tag via Kustomize — see below.
 
 ## Why it exists
 
@@ -46,13 +46,24 @@ just cleanup      # remove Proteus CRDs from the cluster
 
 ## Install on a cluster
 
+Pinned release path (recommended): Kustomize overlay + GHCR semver image tag
+(`ghcr.io/craftingtech/proteus-controller:0.1.0` for git tag `v0.1.0`):
+
 ```bash
-just image                        # docker build → proteus-controller:local
-just deploy                       # kubectl apply -k …
+kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.1.0'
+# or from a clone at that tag:
+kubectl apply -k deploy/overlays/default
 just pf                           # port-forward UI → :8080
 ```
 
-Details: [`deploy/README.md`](deploy/README.md). After changing CRD types: `just crds`.
+Local image instead of GHCR:
+
+```bash
+just image                        # docker build → proteus-controller:local
+just deploy                       # kubectl apply -k deploy/overlays/default
+```
+
+Details and release checklist: [`deploy/README.md`](deploy/README.md). After changing CRD types: `just crds`.
 
 ## Contributing
 

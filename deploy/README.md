@@ -18,8 +18,16 @@ deploy/
 
 ## Container image
 
-Published by CI to **`ghcr.io/craftingtech/proteus-controller`** (`linux/amd64` + `linux/arm64`)
-on pushes to `main` and on git tags `v*`.
+Published by CI (`.github/workflows/image.yml`) to **`ghcr.io/craftingtech/proteus-controller`**
+(`linux/amd64` + `linux/arm64`) on pushes to `main` and on git tags `v*`.
+
+| Trigger | Example image tags |
+| ------- | ------------------ |
+| Push `main` | `main`, `sha-<short>` |
+| Push tag `v0.1.0` | `0.1.0`, `0.1`, `sha-<short>` |
+
+Semver tags omit the leading `v` (docker/metadata-action `pattern={{version}}`). The default
+overlay pins that semver string in `images[].newTag`.
 
 CI builds each architecture on a **native** GitHub-hosted runner (`ubuntu-latest` /
 `ubuntu-24.04-arm`), then merges digests into one multi-arch manifest. That avoids
@@ -38,22 +46,46 @@ The image builds the Dioxus WASM UI (`dx`) then the Rust controller, and embeds 
 
 Backups stream PVC data via a short-lived mount Pod + kube exec `tar` into the operator, which chunks and stores on the fly (no full-archive buffer). On success the Backup status records `durationSeconds` and `throughputBytesPerSec` for later measurement.
 
-## Install with Kustomize
+## Install with Kustomize (pinned GHCR release)
 
-Official path (pinned tag in the overlay):
+Official path — apply the overlay that pins `ghcr.io/craftingtech/proteus-controller` to a
+released semver tag (Apache-2.0, Kustomize-only; no Helm):
 
 ```bash
+# From a clone checked out at the release tag (or main once the overlay matches):
 just deploy
 # or:
 kubectl apply -k deploy/overlays/default
 ```
 
-`deploy/` (root) also builds without the overlay pin — use `overlays/default` unless you set the
-image yourself.
+Remote apply against a published git tag (same manifests + pin):
+
+```bash
+kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.1.0'
+```
+
+`deploy/` (product root) also builds without the overlay pin — prefer `overlays/default` so the
+image tag is explicit.
 
 Pin / bump the tag in [`overlays/default/kustomization.yaml`](overlays/default/kustomization.yaml)
-`images[].newTag`. Local-repo data uses `emptyDir` at `/var/lib/proteus`; replace with a PVC for
-persistence.
+`images[].newTag` (e.g. `"0.1.0"` for git tag `v0.1.0`). Keep it aligned with
+`[workspace.package].version` in the root `Cargo.toml` when cutting a release.
+
+Local-repo data uses `emptyDir` at `/var/lib/proteus`; replace with a PVC for persistence.
+
+The GHCR package must be **Public** for anonymous / in-cluster pulls without a pull secret.
+
+## Cutting a GitHub release (maintainers)
+
+Repo prep (safe to land in a PR) is separate from publishing. After merge of release-prep changes:
+
+1. Confirm `deploy/overlays/default` `images[].newTag` matches the intended semver (no `v` prefix).
+2. Make the GHCR package `proteus-controller` **Public** (GitHub → Packages → package settings).
+3. Push the annotated/lightweight tag from `main` after merge, e.g. `git tag v0.1.0 && git push origin v0.1.0`
+   — do **not** invent the tag in a prep PR.
+4. CI: `image.yml` publishes multi-arch tags; `release.yml` opens the GitHub Release with install notes.
+5. Verify: `docker pull ghcr.io/craftingtech/proteus-controller:0.1.0` (anonymous once Public) and
+   `kubectl apply -k deploy/overlays/default` on a test cluster.
 
 Port-forward the UI:
 
@@ -88,7 +120,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/CraftingTech/proteus.git
-    targetRevision: main
+    targetRevision: v0.1.0   # pin a release tag in production
     path: deploy/overlays/default
   destination:
     server: https://kubernetes.default.svc
