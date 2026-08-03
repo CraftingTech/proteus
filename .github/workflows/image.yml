@@ -62,7 +62,7 @@ jobs:
 
       - name: Build and push with BoringCache
         id: build
-        uses: boringcache/one@666f3331ed3cacce8e3aae96879a4e8658af5483 # v1.16.6
+        uses: boringcache/one@62d929848c7c2f600dc721a849794f2cdca9c6cc # v1.16.7
         with:
           trust-policy: auto
           setup: none
