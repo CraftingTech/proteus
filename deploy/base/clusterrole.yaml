@@ -6,12 +6,14 @@ rules:
   - apiGroups: ["proteus.io"]
     resources:
       - proteusrepositories
+      - proteusbackuppolicies
       - proteusbackups
       - proteusrestores
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["proteus.io"]
     resources:
       - proteusrepositories/status
+      - proteusbackuppolicies/status
       - proteusbackups/status
       - proteusrestores/status
     verbs: ["get", "update", "patch"]

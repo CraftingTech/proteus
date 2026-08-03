@@ -1,3 +1,4 @@
+mod backup_policies;
 mod backups;
 mod common;
 mod repo_store;
@@ -5,6 +6,10 @@ mod repositories;
 mod restores;
 mod secrets;
 
+pub use backup_policies::{
+    create_backup_policy, delete_backup_policy, list_backup_policies, BackupPolicyListItem,
+    CreateBackupPolicyRequest,
+};
 pub use backups::{
     create_backup, delete_backup, list_backups, BackupListItem, CreateBackupRequest,
 };

@@ -5,11 +5,15 @@
 #![deny(clippy::panic)]
 
 mod backup;
+mod backup_policy;
 mod repository;
 mod restore;
 
 pub use backup::{
     BackupPhase, ProteusBackup, ProteusBackupSpec, ProteusBackupStatus, RetentionPolicy,
+};
+pub use backup_policy::{
+    BackupPolicyPhase, ProteusBackupPolicy, ProteusBackupPolicySpec, ProteusBackupPolicyStatus,
 };
 pub use repository::{
     LocalBackendSpec, ProteusRepository, ProteusRepositorySpec, ProteusRepositoryStatus,

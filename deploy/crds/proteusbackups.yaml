@@ -14,11 +14,11 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.policyRef
+      name: Policy
+      type: string
     - jsonPath: .spec.repositoryRef
       name: Repository
-      type: string
-    - jsonPath: .spec.schedule
-      name: Schedule
       type: string
     - jsonPath: .status.phase
       name: Phase
@@ -32,6 +32,7 @@ spec:
         description: Auto-generated derived type for ProteusBackupSpec via `CustomResource`
         properties:
           spec:
+            description: One backup execution (run). Recipe fields may come from `policyRef` or inline (legacy).
             properties:
               includeClusterResources:
                 default: false
@@ -42,16 +43,22 @@ spec:
               labelSelector:
                 nullable: true
                 type: string
+              policyNamespace:
+                nullable: true
+                type: string
+              policyRef:
+                description: When set, the controller loads the recipe from this `ProteusBackupPolicy`.
+                nullable: true
+                type: string
               pvcNames:
-                description: PVCs to back up, by name, in `target_namespace`. Required, at least one.
                 items:
                   type: string
-                minItems: 1
                 type: array
               repositoryNamespace:
                 nullable: true
                 type: string
               repositoryRef:
+                description: Inline recipe (legacy / compat). Ignored when `policyRef` is set.
                 type: string
               retention:
                 default:
@@ -73,10 +80,6 @@ spec:
                 type: string
               targetNamespace:
                 type: string
-            required:
-            - pvcNames
-            - repositoryRef
-            - targetNamespace
             type: object
           status:
             nullable: true

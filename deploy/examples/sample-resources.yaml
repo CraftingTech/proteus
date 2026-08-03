@@ -13,7 +13,7 @@ spec:
     path: /var/lib/proteus/repo
 ---
 apiVersion: proteus.io/v1alpha1
-kind: ProteusBackup
+kind: ProteusBackupPolicy
 metadata:
   name: demo-ns-daily
   namespace: proteus-system
@@ -28,12 +28,21 @@ spec:
     keepLast: 7
     maxAgeDays: 30
 ---
+# One run of the policy above (created by UI "Run now" or manually).
+apiVersion: proteus.io/v1alpha1
+kind: ProteusBackup
+metadata:
+  name: demo-ns-daily-run
+  namespace: proteus-system
+spec:
+  policyRef: demo-ns-daily
+---
 apiVersion: proteus.io/v1alpha1
 kind: ProteusRestore
 metadata:
   name: demo-ns-restore
   namespace: proteus-system
 spec:
-  backupRef: demo-ns-daily
+  backupRef: demo-ns-daily-run
   targetNamespace: demo-restored
   overwrite: false
