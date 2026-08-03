@@ -62,7 +62,7 @@ jobs:
 
       - name: Build and push with BoringCache
         id: build
-        uses: boringcache/one@d633296605f0fe5b3ee1945e8f96d9269311e651 # v1.16.5
+        uses: boringcache/one@666f3331ed3cacce8e3aae96879a4e8658af5483 # v1.16.6
         with:
           trust-policy: auto
           setup: none
@@ -70,10 +70,9 @@ jobs:
           context: .
           dockerfile: deploy/Dockerfile
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: build-${{ github.run_id }}-${{ github.run_attempt }}-${{ env.PLATFORM_PAIR }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          push: true
-          load: false
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           fail-on-cache-error: false
           metadata-hints: |
             project=proteus
