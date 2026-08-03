@@ -11,9 +11,10 @@ use crate::error::ApiResult;
 use crate::inventory::{list_inventory, InventoryItem, InventoryQuery};
 use crate::namespaces::{list_namespaces, NamespaceItem};
 use crate::resources::{
-    create_backup, create_repository, create_restore, delete_backup, delete_repository,
-    delete_restore, get_repository, list_backups, list_repositories, list_restores,
-    patch_repository, BackupListItem, CreateBackupRequest, CreateRepositoryRequest,
+    create_backup, create_backup_policy, create_repository, create_restore, delete_backup,
+    delete_backup_policy, delete_repository, delete_restore, get_repository, list_backup_policies,
+    list_backups, list_repositories, list_restores, patch_repository, BackupListItem,
+    BackupPolicyListItem, CreateBackupPolicyRequest, CreateBackupRequest, CreateRepositoryRequest,
     CreateRestoreRequest, PatchRepositoryRequest, RepositoryListItem, RestoreListItem,
 };
 use crate::state::{ApiState, ClusterSnapshot};
@@ -48,6 +49,14 @@ pub fn router(state: ApiState) -> Router {
             get(get_repository_handler)
                 .patch(patch_repository_handler)
                 .delete(delete_repository_handler),
+        )
+        .route(
+            "/api/v1/backup-policies",
+            get(backup_policies).post(create_backup_policy_handler),
+        )
+        .route(
+            "/api/v1/backup-policies/{namespace}/{name}",
+            delete(delete_backup_policy_handler),
         )
         .route("/api/v1/backups", get(backups).post(create_backup_handler))
         .route(
@@ -133,6 +142,28 @@ async fn delete_repository_handler(
     Path((namespace, name)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     delete_repository(&state, &namespace, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn backup_policies(
+    State(state): State<ApiState>,
+) -> ApiResult<Json<Vec<BackupPolicyListItem>>> {
+    Ok(Json(list_backup_policies(&state).await?))
+}
+
+async fn create_backup_policy_handler(
+    State(state): State<ApiState>,
+    Json(body): Json<CreateBackupPolicyRequest>,
+) -> ApiResult<(StatusCode, Json<BackupPolicyListItem>)> {
+    let item = create_backup_policy(&state, body).await?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn delete_backup_policy_handler(
+    State(state): State<ApiState>,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    delete_backup_policy(&state, &namespace, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
