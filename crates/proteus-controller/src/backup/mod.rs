@@ -5,6 +5,7 @@ pub mod progress;
 pub mod pvc_reader;
 pub mod recipe;
 pub mod repo;
+pub mod retention;
 
 use std::sync::Arc;
 

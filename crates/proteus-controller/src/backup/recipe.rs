@@ -58,7 +58,17 @@ impl BackupRecipe {
 }
 
 pub fn validate_policy_spec(policy: &ProteusBackupPolicy) -> Result<(), String> {
-    BackupRecipe::from_policy(policy).validate()
+    BackupRecipe::from_policy(policy).validate()?;
+    if let Some(schedule) = policy
+        .spec
+        .schedule
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        proteus_core::validate_schedule(schedule)?;
+    }
+    Ok(())
 }
 
 /// Why a run cannot start yet vs permanently.
@@ -215,6 +225,7 @@ mod tests {
                 pvc_names,
                 label_selector: None,
                 schedule: None,
+                paused: false,
                 retention: RetentionPolicy {
                     keep_last: 3,
                     max_age_days: None,
