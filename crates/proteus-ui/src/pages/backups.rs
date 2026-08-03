@@ -1,8 +1,42 @@
 use crate::api::{
     self, BackupListItem, CreateBackupPolicyRequest, CreateBackupRequest, CreateRestoreRequest,
-    RepositoryListItem,
+    PatchBackupPolicyRequest, RepositoryListItem,
 };
 use dioxus::prelude::*;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SchedulePreset {
+    Off,
+    Hourly,
+    Daily,
+    Weekly,
+    Custom,
+}
+
+fn preset_cron(preset: SchedulePreset) -> Option<&'static str> {
+    match preset {
+        SchedulePreset::Off => None,
+        SchedulePreset::Hourly => Some("0 * * * *"),
+        SchedulePreset::Daily => Some("0 2 * * *"),
+        SchedulePreset::Weekly => Some("0 2 * * 0"),
+        SchedulePreset::Custom => None,
+    }
+}
+
+fn format_next_run(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "—".into();
+    }
+    // Keep it short in the row: drop seconds / timezone noise when RFC3339.
+    match trimmed.split_once('T') {
+        Some((date, rest)) => {
+            let time = rest.get(..5).unwrap_or(rest);
+            format!("{date} {time} UTC")
+        }
+        None => trimmed.to_string(),
+    }
+}
 
 fn confirm_delete(kind: &str, name: &str, namespace: &str) -> bool {
     let msg = format!("Delete {kind} {name} in namespace {namespace}?");
@@ -95,6 +129,9 @@ pub fn Backups() -> Element {
     let mut namespace = use_signal(|| "default".to_string());
     let mut selected_repo = use_signal(String::new);
     let mut selected_pvcs = use_signal(Vec::<String>::new);
+    let mut schedule_preset = use_signal(|| SchedulePreset::Off);
+    let mut custom_cron = use_signal(|| "0 2 * * *".to_string());
+    let mut keep_last = use_signal(|| "7".to_string());
     let mut form_error = use_signal(|| Option::<String>::None);
     let mut form_busy = use_signal(|| false);
     let mut action_error = use_signal(|| Option::<String>::None);
@@ -344,6 +381,25 @@ pub fn Backups() -> Element {
             return;
         }
 
+        let schedule = match schedule_preset() {
+            SchedulePreset::Off => None,
+            SchedulePreset::Custom => {
+                let cron = custom_cron().trim().to_string();
+                if cron.is_empty() {
+                    form_error.set(Some("custom cron is required".into()));
+                    return;
+                }
+                Some(cron)
+            }
+            preset => preset_cron(preset).map(str::to_string),
+        };
+
+        let keep = keep_last().trim().parse::<u32>().unwrap_or(0);
+        if keep == 0 {
+            form_error.set(Some("keepLast must be >= 1".into()));
+            return;
+        }
+
         let req = CreateBackupPolicyRequest {
             name: policy_name,
             namespace: policy_ns.clone(),
@@ -351,6 +407,9 @@ pub fn Backups() -> Element {
             repository_namespace: Some(repo_ns),
             target_namespace: policy_ns,
             pvc_names: pvcs,
+            schedule,
+            paused: None,
+            keep_last: Some(keep),
         };
 
         form_busy.set(true);
@@ -359,6 +418,9 @@ pub fn Backups() -> Element {
                 Ok(_) => {
                     name.set(String::new());
                     selected_pvcs.set(Vec::new());
+                    schedule_preset.set(SchedulePreset::Off);
+                    custom_cron.set("0 2 * * *".into());
+                    keep_last.set("7".into());
                     show_form.set(false);
                     form_busy.set(false);
                     refresh_tick.set(refresh_tick() + 1);
@@ -496,6 +558,54 @@ pub fn Backups() -> Element {
                                 None => rsx! { span { class: "muted", "Loading PVCs…" } },
                             }
                         }
+
+                        label {
+                            span { "Schedule (UTC)" }
+                            select {
+                                value: match schedule_preset() {
+                                    SchedulePreset::Off => "off",
+                                    SchedulePreset::Hourly => "hourly",
+                                    SchedulePreset::Daily => "daily",
+                                    SchedulePreset::Weekly => "weekly",
+                                    SchedulePreset::Custom => "custom",
+                                },
+                                onchange: move |evt| {
+                                    schedule_preset.set(match evt.value().as_str() {
+                                        "hourly" => SchedulePreset::Hourly,
+                                        "daily" => SchedulePreset::Daily,
+                                        "weekly" => SchedulePreset::Weekly,
+                                        "custom" => SchedulePreset::Custom,
+                                        _ => SchedulePreset::Off,
+                                    });
+                                },
+                                option { value: "off", "Off" }
+                                option { value: "hourly", "Hourly" }
+                                option { value: "daily", "Daily 02:00" }
+                                option { value: "weekly", "Weekly Sun 02:00" }
+                                option { value: "custom", "Custom cron" }
+                            }
+                        }
+                        if schedule_preset() == SchedulePreset::Custom {
+                            label {
+                                span { "Cron (min hour dom month dow)" }
+                                input {
+                                    r#type: "text",
+                                    value: "{custom_cron}",
+                                    placeholder: "0 2 * * *",
+                                    oninput: move |evt| custom_cron.set(evt.value()),
+                                }
+                            }
+                        }
+                        label {
+                            span { "keepLast" }
+                            input {
+                                r#type: "number",
+                                min: "1",
+                                value: "{keep_last}",
+                                oninput: move |evt| keep_last.set(evt.value()),
+                            }
+                            span { class: "field-hint muted", "Succeeded runs to retain." }
+                        }
                     }
 
                     if let Some(err) = form_error() {
@@ -550,9 +660,21 @@ pub fn Backups() -> Element {
                                     let item_ns = item.namespace.clone();
                                     let run_name = item.name.clone();
                                     let run_ns = item.namespace.clone();
+                                    let pause_name = item.name.clone();
+                                    let pause_ns = item.namespace.clone();
                                     let message = item.message.clone().unwrap_or_default();
                                     let pvcs = item.pvc_names.join(", ");
                                     let can_run = item.phase.as_deref() == Some("Ready");
+                                    let paused = item.paused;
+                                    let schedule_label = item
+                                        .schedule
+                                        .clone()
+                                        .unwrap_or_else(|| "off".into());
+                                    let next_label = item
+                                        .next_run_at
+                                        .as_deref()
+                                        .map(format_next_run)
+                                        .unwrap_or_else(|| "—".into());
                                     rsx! {
                                         div { class: "resource-row",
                                             div { class: "resource-id",
@@ -573,6 +695,23 @@ pub fn Backups() -> Element {
                                                             title: "PVCs: {pvcs}",
                                                             "{pvcs}"
                                                         }
+                                                    }
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Cron schedule (UTC)",
+                                                        "{schedule_label}"
+                                                    }
+                                                    if paused {
+                                                        span {
+                                                            class: "pill",
+                                                            title: "Schedule paused",
+                                                            "paused"
+                                                        }
+                                                    }
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Next scheduled run",
+                                                        "next {next_label}"
                                                     }
                                                     span {
                                                         class: "pill",
@@ -626,6 +765,43 @@ pub fn Backups() -> Element {
                                                         });
                                                     },
                                                     "Run now"
+                                                }
+                                                button {
+                                                    class: "btn",
+                                                    r#type: "button",
+                                                    title: if paused {
+                                                        "Resume scheduled runs"
+                                                    } else {
+                                                        "Pause scheduled runs"
+                                                    },
+                                                    onclick: move |_| {
+                                                        action_error.set(None);
+                                                        let ns = pause_ns.clone();
+                                                        let name = pause_name.clone();
+                                                        let next_paused = !paused;
+                                                        spawn(async move {
+                                                            let req = PatchBackupPolicyRequest {
+                                                                schedule: None,
+                                                                paused: Some(next_paused),
+                                                                keep_last: None,
+                                                            };
+                                                            match api::patch_backup_policy(
+                                                                &ns, &name, &req,
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(_) => {
+                                                                    refresh_tick
+                                                                        .set(refresh_tick() + 1);
+                                                                }
+                                                                Err(err) => {
+                                                                    action_error
+                                                                        .set(Some(err.message));
+                                                                }
+                                                            }
+                                                        });
+                                                    },
+                                                    if paused { "Resume" } else { "Pause" }
                                                 }
                                                 button {
                                                     class: "btn btn-danger",
