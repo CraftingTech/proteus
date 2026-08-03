@@ -10,7 +10,7 @@ use super::secrets::load_s3_credentials_for_api;
 use crate::state::{object_namespace, ApiState};
 
 /// Keep snapshots belonging to other backups that share the same repository; delete the rest.
-pub(crate) async fn gc_repository_after_backup_delete(
+pub async fn gc_repository_after_backup_delete(
     state: &ApiState,
     deleting_namespace: &str,
     deleting_name: &str,

@@ -88,16 +88,7 @@ pub async fn list_backups(state: &ApiState) -> ApiResult<Vec<BackupListItem>> {
 }
 
 fn generate_run_name(policy_name: &str) -> String {
-    let stamp = Utc::now().format("%Y%m%d%H%M%S");
-    let base = format!("{policy_name}-{stamp}");
-    // DNS-1123 subdomain: max 63 chars.
-    if base.len() <= 63 {
-        base
-    } else {
-        let keep = 63usize.saturating_sub(1 + stamp.to_string().len());
-        let prefix: String = policy_name.chars().take(keep).collect();
-        format!("{prefix}-{stamp}")
-    }
+    proteus_core::backup_run_name(policy_name, Utc::now())
 }
 
 pub fn build_inline_backup(req: &CreateBackupRequest) -> ApiResult<(String, ProteusBackup)> {
@@ -384,6 +375,7 @@ mod tests {
                 pvc_names: vec!["data".into()],
                 label_selector: None,
                 schedule: None,
+                paused: false,
                 retention: RetentionPolicy {
                     keep_last: 3,
                     max_age_days: None,

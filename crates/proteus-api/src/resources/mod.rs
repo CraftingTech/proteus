@@ -7,12 +7,13 @@ mod restores;
 mod secrets;
 
 pub use backup_policies::{
-    create_backup_policy, delete_backup_policy, list_backup_policies, BackupPolicyListItem,
-    CreateBackupPolicyRequest,
+    create_backup_policy, delete_backup_policy, list_backup_policies, patch_backup_policy,
+    BackupPolicyListItem, CreateBackupPolicyRequest, PatchBackupPolicyRequest,
 };
 pub use backups::{
     create_backup, delete_backup, list_backups, BackupListItem, CreateBackupRequest,
 };
+pub use repo_store::gc_repository_after_backup_delete;
 pub use repositories::{
     create_repository, delete_repository, get_repository, list_repositories, patch_repository,
     CreateRepositoryRequest, PatchRepositoryRequest, RepositoryListItem,
