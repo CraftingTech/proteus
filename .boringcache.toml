@@ -1,0 +1,4 @@
+workspace = "boringcache/proteus"
+
+[adapters.docker]
+tag = "proteus-image"
