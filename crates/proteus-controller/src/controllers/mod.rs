@@ -1,4 +1,5 @@
 mod backup;
+mod backup_policy;
 pub(crate) mod repository;
 mod restore;
 
@@ -12,10 +13,11 @@ use kube::runtime::controller::{Action, Controller};
 use kube::runtime::watcher::Config;
 use kube::{Api, Client};
 use proteus_api::ApiState;
-use proteus_crd::{ProteusBackup, ProteusRepository, ProteusRestore};
+use proteus_crd::{ProteusBackup, ProteusBackupPolicy, ProteusRepository, ProteusRestore};
 use tracing::{error, info};
 
 use self::backup::reconcile_backup;
+use self::backup_policy::reconcile_backup_policy;
 use self::repository::reconcile_repository;
 use self::restore::reconcile_restore;
 use crate::error::ControllerError;
@@ -39,6 +41,7 @@ impl ControllerSet {
         });
 
         let repos = Api::<ProteusRepository>::all(client.clone());
+        let policies = Api::<ProteusBackupPolicy>::all(client.clone());
         let backups = Api::<ProteusBackup>::all(client.clone());
         let restores = Api::<ProteusRestore>::all(client);
 
@@ -52,6 +55,19 @@ impl ControllerSet {
                 match res {
                     Ok((obj_ref, _)) => info!(name = %obj_ref.name, "repository reconciled"),
                     Err(e) => error!(error = %e, "repository reconcile failed"),
+                }
+            });
+
+        let policy_ctrl = Controller::new(policies, Config::default())
+            .run(
+                |obj, ctx| async move { reconcile_backup_policy(obj, ctx).await },
+                error_policy,
+                ctx.clone(),
+            )
+            .for_each(|res| async move {
+                match res {
+                    Ok((obj_ref, _)) => info!(name = %obj_ref.name, "backup policy reconciled"),
+                    Err(e) => error!(error = %e, "backup policy reconcile failed"),
                 }
             });
 
@@ -83,6 +99,7 @@ impl ControllerSet {
 
         tokio::select! {
             () = repo_ctrl => Err(anyhow::anyhow!("repository controller terminated")),
+            () = policy_ctrl => Err(anyhow::anyhow!("backup policy controller terminated")),
             () = backup_ctrl => Err(anyhow::anyhow!("backup controller terminated")),
             () = restore_ctrl => Err(anyhow::anyhow!("restore controller terminated")),
         }

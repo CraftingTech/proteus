@@ -153,6 +153,8 @@ mod tests {
         let mut backup = ProteusBackup::new(
             "backup-1",
             proteus_crd::ProteusBackupSpec {
+                policy_ref: None,
+                policy_namespace: None,
                 repository_ref: "repo".to_string(),
                 repository_namespace: None,
                 target_namespace: "workloads".to_string(),
