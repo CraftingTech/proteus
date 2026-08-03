@@ -1,0 +1,99 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: proteusbackuppolicies.proteus.io
+spec:
+  group: proteus.io
+  names:
+    categories: []
+    kind: ProteusBackupPolicy
+    plural: proteusbackuppolicies
+    shortNames:
+    - pbackuppolicy
+    singular: proteusbackuppolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.repositoryRef
+      name: Repository
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for ProteusBackupPolicySpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              includeClusterResources:
+                default: false
+                type: boolean
+              includeVolumes:
+                default: true
+                type: boolean
+              labelSelector:
+                nullable: true
+                type: string
+              pvcNames:
+                description: PVCs to back up, by name, in `target_namespace`. Required, at least one.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+              repositoryNamespace:
+                nullable: true
+                type: string
+              repositoryRef:
+                type: string
+              retention:
+                default:
+                  keepLast: 7
+                properties:
+                  keepLast:
+                    default: 7
+                    format: uint32
+                    minimum: 0.0
+                    type: integer
+                  maxAgeDays:
+                    format: uint32
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                type: object
+              schedule:
+                description: Cron expression; unused until scheduled runs (#16).
+                nullable: true
+                type: string
+              targetNamespace:
+                type: string
+            required:
+            - pvcNames
+            - repositoryRef
+            - targetNamespace
+            type: object
+          status:
+            nullable: true
+            properties:
+              message:
+                nullable: true
+                type: string
+              phase:
+                enum:
+                - Ready
+                - Invalid
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: ProteusBackupPolicy
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -3,5 +3,6 @@ kind: Kustomization
 
 resources:
   - proteusrepositories.yaml
+  - proteusbackuppolicies.yaml
   - proteusbackups.yaml
   - proteusrestores.yaml
