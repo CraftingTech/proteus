@@ -61,10 +61,12 @@ pub async fn reconcile_backup_policy(
         match reconcile_schedule(&obj, &ns, &name, &mut status, &ctx).await {
             Ok(secs) => requeue_secs = secs,
             Err(err) => {
-                warn!(%ns, %name, error = %err, "schedule reconcile failed");
-                status.phase = Some(BackupPolicyPhase::Invalid);
-                status.message = Some(err);
-                status.next_run_at = None;
+                // Operational failures (apiserver blips, create conflicts, etc.) must not
+                // mark a valid recipe Invalid — that blocks Run now until the next Ready.
+                warn!(%ns, %name, error = %err, "schedule reconcile failed; staying Ready");
+                status.phase = Some(BackupPolicyPhase::Ready);
+                status.message = Some(format!("policy is valid; schedule warning: {err}"));
+                requeue_secs = ACTIVE_RUN_REQUEUE_SECS;
             }
         }
     }
