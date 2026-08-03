@@ -1,5 +1,6 @@
 use crate::api::{
-    self, BackupListItem, CreateBackupRequest, CreateRestoreRequest, RepositoryListItem,
+    self, BackupListItem, CreateBackupPolicyRequest, CreateBackupRequest, CreateRestoreRequest,
+    RepositoryListItem,
 };
 use dioxus::prelude::*;
 
@@ -12,11 +13,15 @@ fn confirm_delete(kind: &str, name: &str, namespace: &str) -> bool {
 
 fn confirm_delete_backup(name: &str, namespace: &str, _has_snapshot: bool) -> bool {
     let msg = format!(
-        "Delete backup {name} in {namespace}?\n\nUnreferenced objects in its repository will be removed (other backups' snapshots are kept)."
+        "Delete backup run {name} in {namespace}?\n\nUnreferenced objects in its repository will be removed (other runs' snapshots are kept)."
     );
     web_sys::window()
         .and_then(|w| w.confirm_with_message(&msg).ok())
         .unwrap_or(false)
+}
+
+fn confirm_delete_policy(name: &str, namespace: &str) -> bool {
+    confirm_delete("backup policy", name, namespace)
 }
 
 fn ready_repositories(repos: &[RepositoryListItem]) -> Vec<&RepositoryListItem> {
@@ -156,6 +161,11 @@ pub fn Backups() -> Element {
                 selected_pvcs.set(kept);
             }
         }
+    });
+
+    let policies = use_resource(move || {
+        let _ = refresh_tick();
+        async move { api::list_backup_policies().await }
     });
 
     let backups = use_resource(move || {
@@ -312,16 +322,16 @@ pub fn Backups() -> Element {
         form_error.set(None);
         action_error.set(None);
 
-        let backup_name = name().trim().to_string();
-        let backup_ns = namespace().trim().to_string();
+        let policy_name = name().trim().to_string();
+        let policy_ns = namespace().trim().to_string();
         let repo_value = selected_repo().trim().to_string();
         let pvcs = selected_pvcs();
 
-        if backup_name.is_empty() {
+        if policy_name.is_empty() {
             form_error.set(Some("name is required".into()));
             return;
         }
-        if backup_ns.is_empty() {
+        if policy_ns.is_empty() {
             form_error.set(Some("namespace is required".into()));
             return;
         }
@@ -334,18 +344,18 @@ pub fn Backups() -> Element {
             return;
         }
 
-        let req = CreateBackupRequest {
-            name: backup_name,
-            namespace: backup_ns.clone(),
+        let req = CreateBackupPolicyRequest {
+            name: policy_name,
+            namespace: policy_ns.clone(),
             repository_ref: repo_name,
             repository_namespace: Some(repo_ns),
-            target_namespace: backup_ns,
+            target_namespace: policy_ns,
             pvc_names: pvcs,
         };
 
         form_busy.set(true);
         spawn(async move {
-            match api::create_backup(&req).await {
+            match api::create_backup_policy(&req).await {
                 Ok(_) => {
                     name.set(String::new());
                     selected_pvcs.set(Vec::new());
@@ -373,7 +383,7 @@ pub fn Backups() -> Element {
                             show_form.set(!show_form());
                             form_error.set(None);
                         },
-                        if show_form() { "Cancel" } else { "+ New backup" }
+                        if show_form() { "Cancel" } else { "+ New policy" }
                     }
                     button {
                         class: "btn",
@@ -386,7 +396,7 @@ pub fn Backups() -> Element {
 
             if show_form() {
                 div { class: "panel form-panel",
-                    h2 { "New backup" }
+                    h2 { "New backup policy" }
 
                     div { class: "form-grid",
                         label {
@@ -501,7 +511,7 @@ pub fn Backups() -> Element {
                             r#type: "button",
                             disabled: form_busy(),
                             onclick: on_create,
-                            if form_busy() { "Creating…" } else { "Create backup" }
+                            if form_busy() { "Creating…" } else { "Create policy" }
                         }
                     }
                 }
@@ -515,7 +525,153 @@ pub fn Backups() -> Element {
             }
 
             div { class: "section-bar",
-                h2 { "Backup jobs" }
+                h2 { "Policies" }
+            }
+            match &*policies.read_unchecked() {
+                None => rsx! {
+                    div { class: "panel",
+                        p { class: "muted empty-state", "Loading policies…" }
+                    }
+                },
+                Some(Err(err)) => rsx! {
+                    div { class: "banner error",
+                        strong { "Failed to load policies" }
+                        p { "{err}" }
+                    }
+                },
+                Some(Ok(items)) => rsx! {
+                    div { class: "panel resource-list",
+                        if items.is_empty() {
+                            p { class: "muted empty-state", "No backup policies yet." }
+                        } else {
+                            for item in items.iter() {
+                                {
+                                    let item_name = item.name.clone();
+                                    let item_ns = item.namespace.clone();
+                                    let run_name = item.name.clone();
+                                    let run_ns = item.namespace.clone();
+                                    let message = item.message.clone().unwrap_or_default();
+                                    let pvcs = item.pvc_names.join(", ");
+                                    let can_run = item.phase.as_deref() == Some("Ready");
+                                    rsx! {
+                                        div { class: "resource-row",
+                                            div { class: "resource-id",
+                                                span { class: "resource-ns", "{item.namespace}" }
+                                                span { class: "resource-name", "{item.name}" }
+                                            }
+                                            div { class: "resource-detail",
+                                                div { class: "resource-line",
+                                                    span { title: "Repository", "{item.repository_ref}" }
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Target namespace",
+                                                        "{item.target_namespace}"
+                                                    }
+                                                    if !pvcs.is_empty() {
+                                                        span {
+                                                            class: "pill",
+                                                            title: "PVCs: {pvcs}",
+                                                            "{pvcs}"
+                                                        }
+                                                    }
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Retention keepLast",
+                                                        "keep {item.keep_last}"
+                                                    }
+                                                }
+                                            }
+                                            div {
+                                                class: "resource-status",
+                                                title: "{message}",
+                                                span {
+                                                    class: match item.phase.as_deref() {
+                                                        Some("Ready") => "badge phase-ready",
+                                                        Some("Invalid") => "badge phase-failed",
+                                                        _ => "badge",
+                                                    },
+                                                    "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                }
+                                                if !message.is_empty() {
+                                                    span { class: "status-msg muted", "{message}" }
+                                                }
+                                            }
+                                            div { class: "resource-actions",
+                                                button {
+                                                    class: "btn",
+                                                    r#type: "button",
+                                                    disabled: !can_run,
+                                                    title: if can_run {
+                                                        "Create a backup run from this policy"
+                                                    } else {
+                                                        "Policy must be Ready before Run now"
+                                                    },
+                                                    onclick: move |_| {
+                                                        action_error.set(None);
+                                                        let req = CreateBackupRequest {
+                                                            name: None,
+                                                            namespace: Some(run_ns.clone()),
+                                                            policy_ref: run_name.clone(),
+                                                            policy_namespace: run_ns.clone(),
+                                                        };
+                                                        spawn(async move {
+                                                            match api::create_backup(&req).await {
+                                                                Ok(_) => {
+                                                                    refresh_tick.set(refresh_tick() + 1);
+                                                                }
+                                                                Err(err) => {
+                                                                    action_error.set(Some(err.message));
+                                                                }
+                                                            }
+                                                        });
+                                                    },
+                                                    "Run now"
+                                                }
+                                                button {
+                                                    class: "btn btn-danger",
+                                                    r#type: "button",
+                                                    title: "Delete policy",
+                                                    onclick: move |_| {
+                                                        if !confirm_delete_policy(
+                                                            &item_name,
+                                                            &item_ns,
+                                                        ) {
+                                                            return;
+                                                        }
+                                                        action_error.set(None);
+                                                        let ns = item_ns.clone();
+                                                        let name = item_name.clone();
+                                                        spawn(async move {
+                                                            match api::delete_backup_policy(
+                                                                &ns, &name,
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(()) => {
+                                                                    refresh_tick
+                                                                        .set(refresh_tick() + 1);
+                                                                }
+                                                                Err(err) => {
+                                                                    action_error
+                                                                        .set(Some(err.message));
+                                                                }
+                                                            }
+                                                        });
+                                                    },
+                                                    "Delete"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+
+            div { class: "section-bar",
+                h2 { "Runs" }
             }
             match &*backups.read_unchecked() {
                 None => rsx! {
@@ -532,7 +688,7 @@ pub fn Backups() -> Element {
                 Some(Ok(items)) => rsx! {
                     div { class: "panel resource-list",
                         if items.is_empty() {
-                            p { class: "muted empty-state", "No backups yet." }
+                            p { class: "muted empty-state", "No backup runs yet." }
                         } else {
                             for item in items.iter() {
                                 {
@@ -559,6 +715,7 @@ pub fn Backups() -> Element {
                                         short_id(&snap_full, 12)
                                     };
                                     let pvcs = item.pvc_names.join(", ");
+                                    let policy = item.policy_ref.clone().unwrap_or_default();
                                     rsx! {
                                         div { class: "resource-row",
                                             div { class: "resource-id",
@@ -567,6 +724,13 @@ pub fn Backups() -> Element {
                                             }
                                             div { class: "resource-detail",
                                                 div { class: "resource-line",
+                                                    if !policy.is_empty() {
+                                                        span {
+                                                            class: "pill",
+                                                            title: "Policy",
+                                                            "policy:{policy}"
+                                                        }
+                                                    }
                                                     span { title: "Repository", "{item.repository_ref}" }
                                                     if !pvcs.is_empty() {
                                                         span {
