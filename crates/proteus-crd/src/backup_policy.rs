@@ -79,8 +79,7 @@ spec:
   retention:
     keepLast: 3
 "#;
-        let policy: ProteusBackupPolicy =
-            serde_yaml::from_str(yaml).expect("policy deserializes");
+        let policy: ProteusBackupPolicy = serde_yaml::from_str(yaml).expect("policy deserializes");
         assert_eq!(policy.spec.repository_ref, "local-repo");
         assert_eq!(policy.spec.pvc_names, vec!["demo-data".to_string()]);
         assert_eq!(policy.spec.retention.keep_last, 3);

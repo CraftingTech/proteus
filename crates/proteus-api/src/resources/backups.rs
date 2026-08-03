@@ -102,8 +102,7 @@ fn generate_run_name(policy_name: &str) -> String {
 
 pub fn build_inline_backup(req: &CreateBackupRequest) -> ApiResult<(String, ProteusBackup)> {
     let name = require_non_empty("name", req.name.as_deref())?;
-    let target_namespace =
-        require_non_empty("targetNamespace", req.target_namespace.as_deref())?;
+    let target_namespace = require_non_empty("targetNamespace", req.target_namespace.as_deref())?;
     let repository_ref = require_non_empty("repositoryRef", req.repository_ref.as_deref())?;
     let namespace =
         optional_trimmed(req.namespace.as_deref()).unwrap_or_else(|| target_namespace.clone());
@@ -186,8 +185,7 @@ pub async fn create_backup(
     state: &ApiState,
     req: CreateBackupRequest,
 ) -> ApiResult<BackupListItem> {
-    let (namespace, backup) = if let Some(policy_ref) =
-        optional_trimmed(req.policy_ref.as_deref())
+    let (namespace, backup) = if let Some(policy_ref) = optional_trimmed(req.policy_ref.as_deref())
     {
         let policy_namespace = optional_trimmed(req.policy_namespace.as_deref())
             .or_else(|| optional_trimmed(req.namespace.as_deref()))

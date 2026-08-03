@@ -129,8 +129,7 @@ spec:
   pvcNames:
     - demo-data
 "#;
-        let backup: ProteusBackup =
-            serde_yaml::from_str(yaml).expect("legacy backup deserializes");
+        let backup: ProteusBackup = serde_yaml::from_str(yaml).expect("legacy backup deserializes");
         assert!(backup.spec.policy_ref.is_none());
         assert_eq!(backup.spec.repository_ref, "local-repo");
         assert_eq!(backup.spec.pvc_names, vec!["demo-data".to_string()]);

@@ -95,9 +95,7 @@ pub fn build_backup_policy(
 
     let keep_last = req.keep_last.unwrap_or(7);
     if keep_last == 0 {
-        return Err(ApiError::BadRequest(
-            "keepLast must be >= 1".to_string(),
-        ));
+        return Err(ApiError::BadRequest("keepLast must be >= 1".to_string()));
     }
 
     let policy = ProteusBackupPolicy {
