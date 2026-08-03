@@ -61,8 +61,80 @@ pub fn validate_policy_spec(policy: &ProteusBackupPolicy) -> Result<(), String> 
     BackupRecipe::from_policy(policy).validate()
 }
 
-/// Load recipe from `policyRef` or inline Backup spec.
+/// Why a run cannot start yet vs permanently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolveRecipeError {
+    /// Policy exists but is not Ready yet — requeue the run.
+    NotReady(String),
+    /// Missing/Invalid policy or invalid recipe — fail the run.
+    Failed(String),
+}
+
+/// Load recipe from `policyRef` (must be Ready) or inline Backup spec.
 pub async fn resolve_recipe(
+    client: &Client,
+    backup: &ProteusBackup,
+    backup_namespace: &str,
+) -> Result<BackupRecipe, ResolveRecipeError> {
+    let Some(policy_ref) = backup
+        .spec
+        .policy_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        let recipe = BackupRecipe::from_inline(&backup.spec);
+        return recipe
+            .validate()
+            .map(|()| recipe)
+            .map_err(ResolveRecipeError::Failed);
+    };
+
+    let policy_ns = policy_namespace(backup, backup_namespace);
+    let api: Api<ProteusBackupPolicy> = Api::namespaced(client.clone(), policy_ns);
+    let policy = match api.get(policy_ref).await {
+        Ok(p) => p,
+        Err(err) => {
+            return Err(ResolveRecipeError::Failed(format!(
+                "policyRef '{policy_ref}' in namespace '{policy_ns}': {err}"
+            )));
+        }
+    };
+
+    match policy.status.as_ref().and_then(|s| s.phase.as_ref()) {
+        Some(BackupPolicyPhase::Ready) => {}
+        Some(BackupPolicyPhase::Invalid) => {
+            let message = policy
+                .status
+                .as_ref()
+                .and_then(|s| s.message.as_deref())
+                .unwrap_or("policy is Invalid");
+            return Err(ResolveRecipeError::Failed(format!(
+                "policyRef '{}' in namespace '{}' is Invalid: {message}",
+                policy.name_any(),
+                policy_ns
+            )));
+        }
+        None => {
+            return Err(ResolveRecipeError::NotReady(format!(
+                "waiting for policyRef '{}' in namespace '{}' to become Ready",
+                policy.name_any(),
+                policy_ns
+            )));
+        }
+    }
+
+    let recipe = BackupRecipe::from_policy(&policy);
+    recipe
+        .validate()
+        .map(|()| recipe)
+        .map_err(ResolveRecipeError::Failed)
+}
+
+/// Recipe for restore / GC: prefer live policy fields, else stamped inline.
+///
+/// Does not require Ready — historical runs must still find their repository.
+pub async fn load_recipe(
     client: &Client,
     backup: &ProteusBackup,
     backup_namespace: &str,
@@ -79,46 +151,34 @@ pub async fn resolve_recipe(
         return Ok(recipe);
     };
 
-    let policy_ns = backup
+    let policy_ns = policy_namespace(backup, backup_namespace);
+    let api: Api<ProteusBackupPolicy> = Api::namespaced(client.clone(), policy_ns);
+    match api.get(policy_ref).await {
+        Ok(policy) => {
+            let recipe = BackupRecipe::from_policy(&policy);
+            recipe.validate()?;
+            Ok(recipe)
+        }
+        Err(err) => {
+            let stamped = BackupRecipe::from_inline(&backup.spec);
+            if stamped.validate().is_ok() {
+                return Ok(stamped);
+            }
+            Err(format!(
+                "policyRef '{policy_ref}' in namespace '{policy_ns}': {err}"
+            ))
+        }
+    }
+}
+
+fn policy_namespace<'a>(backup: &'a ProteusBackup, backup_namespace: &'a str) -> &'a str {
+    backup
         .spec
         .policy_namespace
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(backup_namespace);
-
-    let api: Api<ProteusBackupPolicy> = Api::namespaced(client.clone(), policy_ns);
-    let policy = api
-        .get(policy_ref)
-        .await
-        .map_err(|err| format!("policyRef '{policy_ref}' in namespace '{policy_ns}': {err}"))?;
-
-    match policy.status.as_ref().and_then(|s| s.phase.as_ref()) {
-        Some(BackupPolicyPhase::Ready) => {}
-        Some(BackupPolicyPhase::Invalid) => {
-            let message = policy
-                .status
-                .as_ref()
-                .and_then(|s| s.message.as_deref())
-                .unwrap_or("policy is Invalid");
-            return Err(format!(
-                "policyRef '{}' in namespace '{}' is Invalid: {message}",
-                policy.name_any(),
-                policy_ns
-            ));
-        }
-        None => {
-            return Err(format!(
-                "policyRef '{}' in namespace '{}' has no status yet (not Ready)",
-                policy.name_any(),
-                policy_ns
-            ));
-        }
-    }
-
-    let recipe = BackupRecipe::from_policy(&policy);
-    recipe.validate()?;
-    Ok(recipe)
+        .unwrap_or(backup_namespace)
 }
 
 #[cfg(test)]

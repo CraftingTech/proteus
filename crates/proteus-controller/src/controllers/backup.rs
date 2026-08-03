@@ -10,7 +10,7 @@ use tracing::{info, warn};
 
 use super::ReconcileCtx;
 use crate::backup::progress::BackupProgressSink;
-use crate::backup::recipe::resolve_recipe;
+use crate::backup::recipe::{load_recipe, resolve_recipe, ResolveRecipeError};
 use crate::error::ControllerResult;
 
 pub async fn reconcile_backup(
@@ -29,7 +29,7 @@ pub async fn reconcile_backup(
         Some(BackupPhase::Succeeded | BackupPhase::Failed)
     ) {
         // Best-effort: reap mount pods left after cancel/crash.
-        if let Ok(recipe) = resolve_recipe(&ctx.client, &obj, &ns).await {
+        if let Ok(recipe) = load_recipe(&ctx.client, &obj, &ns).await {
             let _ = crate::backup::pvc_reader::cleanup_backup_mount_pods(
                 &ctx.client,
                 &recipe.target_namespace,
@@ -51,7 +51,15 @@ pub async fn reconcile_backup(
 
     let recipe = match resolve_recipe(&ctx.client, &obj, &ns).await {
         Ok(recipe) => recipe,
-        Err(message) => {
+        Err(ResolveRecipeError::NotReady(message)) => {
+            let status = waiting_policy_status(&obj, &message);
+            if status_changed(obj.status.as_ref(), &status) {
+                patch_status(&api, &name, &status).await?;
+            }
+            refresh_counts(&ctx).await;
+            return Ok(Action::requeue(Duration::from_secs(5)));
+        }
+        Err(ResolveRecipeError::Failed(message)) => {
             let status = terminal_status(&obj, Err(message), None);
             if status_changed(obj.status.as_ref(), &status) {
                 patch_status(&api, &name, &status).await?;
@@ -124,6 +132,15 @@ fn carry_forward(obj: &ProteusBackup) -> ProteusBackupStatus {
         throughput_bytes_per_sec: obj.status.as_ref().and_then(|s| s.throughput_bytes_per_sec),
         progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
         ..Default::default()
+    }
+}
+
+fn waiting_policy_status(obj: &ProteusBackup, message: &str) -> ProteusBackupStatus {
+    ProteusBackupStatus {
+        phase: Some(BackupPhase::Pending),
+        message: Some(message.to_string()),
+        progress_percent: Some(0),
+        ..carry_forward(obj)
     }
 }
 
@@ -275,6 +292,14 @@ mod tests {
                 include_cluster_resources: false,
             },
         )
+    }
+
+    #[test]
+    fn waiting_policy_keeps_pending_not_failed() {
+        let b = backup_with(vec!["data".into()]);
+        let status = waiting_policy_status(&b, "waiting for policy");
+        assert_eq!(status.phase, Some(BackupPhase::Pending));
+        assert_eq!(status.message.as_deref(), Some("waiting for policy"));
     }
 
     #[test]

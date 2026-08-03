@@ -7,6 +7,7 @@ pub mod pvc_writer;
 use kube::{Api, ResourceExt};
 use proteus_crd::{BackupPhase, ProteusBackup, ProteusRestore};
 
+use crate::backup::recipe::load_recipe;
 use crate::backup::repo::open_repository;
 use crate::controllers::ReconcileCtx;
 
@@ -22,11 +23,13 @@ pub async fn run_restore(
         .namespace()
         .unwrap_or_else(|| restore_namespace.to_string());
 
+    let recipe = load_recipe(&ctx.client, &backup, &backup_namespace).await?;
+
     let opened = open_repository(
         &ctx.client,
         &backup_namespace,
-        &backup.spec.repository_ref,
-        backup.spec.repository_namespace.as_deref(),
+        &recipe.repository_ref,
+        recipe.repository_namespace.as_deref(),
     )
     .await?;
 
@@ -37,7 +40,7 @@ pub async fn run_restore(
     if manifest.encrypted && opened.encryption_key.is_none() {
         return Err(format!(
             "snapshot '{snapshot_id}' is encrypted but repository '{}' has no key configured",
-            backup.spec.repository_ref
+            recipe.repository_ref
         ));
     }
     if manifest.volumes.is_empty() {

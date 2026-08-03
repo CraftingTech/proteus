@@ -2,7 +2,9 @@ use chrono::Utc;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{DeleteParams, ListParams, PostParams};
 use kube::{Api, ResourceExt};
-use proteus_crd::{ProteusBackup, ProteusBackupPolicy, ProteusBackupSpec, RetentionPolicy};
+use proteus_crd::{
+    BackupPolicyPhase, ProteusBackup, ProteusBackupPolicy, ProteusBackupSpec, RetentionPolicy,
+};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -201,6 +203,24 @@ pub async fn create_backup(
                 "policyRef '{policy_ref}' in '{policy_namespace}': {err}"
             ))
         })?;
+        match policy.status.as_ref().and_then(|s| s.phase.as_ref()) {
+            Some(BackupPolicyPhase::Ready) => {}
+            Some(BackupPolicyPhase::Invalid) => {
+                let message = policy
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.message.as_deref())
+                    .unwrap_or("policy is Invalid");
+                return Err(ApiError::BadRequest(format!(
+                    "policyRef '{policy_ref}' in '{policy_namespace}' is Invalid: {message}"
+                )));
+            }
+            None => {
+                return Err(ApiError::BadRequest(format!(
+                    "policyRef '{policy_ref}' in '{policy_namespace}' is not Ready yet"
+                )));
+            }
+        }
         build_run_from_policy(&req, &policy, &policy_namespace)?
     } else {
         build_inline_backup(&req)?
@@ -212,57 +232,80 @@ pub async fn create_backup(
     Ok(backup_list_item(&created))
 }
 
-async fn resolve_backup_repository(
+/// Repository identity for GC: prefer live policy when `policyRef` is set, else stamped/inline.
+pub(crate) async fn resolve_backup_repository(
     state: &ApiState,
     backup: &ProteusBackup,
     backup_namespace: &str,
-) -> ApiResult<(String, String)> {
-    if !backup.spec.repository_ref.trim().is_empty() {
-        let repo_ns = backup
-            .spec
-            .repository_namespace
-            .as_deref()
-            .unwrap_or(backup_namespace)
-            .to_string();
-        return Ok((repo_ns, backup.spec.repository_ref.clone()));
-    }
-
-    let policy_ref = backup
+) -> Result<(String, String), String> {
+    if let Some(policy_ref) = backup
         .spec
         .policy_ref
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            ApiError::BadRequest(
-                "backup has neither repositoryRef nor policyRef; cannot purge repository".into(),
-            )
-        })?;
-    let policy_ns = backup
-        .spec
-        .policy_namespace
-        .as_deref()
-        .unwrap_or(backup_namespace);
-    let api: Api<ProteusBackupPolicy> = Api::namespaced(state.client.clone(), policy_ns);
-    let policy = api.get(policy_ref).await.map_err(|err| {
-        ApiError::Internal(format!(
-            "failed to load policy '{policy_ref}' for repository GC: {err}"
-        ))
-    })?;
-    let repo_ns = policy
+    {
+        let policy_ns = backup
+            .spec
+            .policy_namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(backup_namespace);
+        let api: Api<ProteusBackupPolicy> = Api::namespaced(state.client.clone(), policy_ns);
+        match api.get(policy_ref).await {
+            Ok(policy) => {
+                let repo_ns = policy
+                    .spec
+                    .repository_namespace
+                    .as_deref()
+                    .unwrap_or(policy_ns)
+                    .to_string();
+                if policy.spec.repository_ref.trim().is_empty() {
+                    return Err(format!(
+                        "policy '{policy_ref}' in '{policy_ns}' has empty repositoryRef"
+                    ));
+                }
+                return Ok((repo_ns, policy.spec.repository_ref.clone()));
+            }
+            Err(err) => {
+                if !backup.spec.repository_ref.trim().is_empty() {
+                    let repo_ns = backup
+                        .spec
+                        .repository_namespace
+                        .as_deref()
+                        .unwrap_or(backup_namespace)
+                        .to_string();
+                    return Ok((repo_ns, backup.spec.repository_ref.clone()));
+                }
+                return Err(format!(
+                    "failed to load policy '{policy_ref}' for repository GC: {err}"
+                ));
+            }
+        }
+    }
+
+    if backup.spec.repository_ref.trim().is_empty() {
+        return Err(
+            "backup has neither repositoryRef nor policyRef; cannot purge repository".into(),
+        );
+    }
+    let repo_ns = backup
         .spec
         .repository_namespace
         .as_deref()
-        .unwrap_or(policy_ns)
+        .unwrap_or(backup_namespace)
         .to_string();
-    Ok((repo_ns, policy.spec.repository_ref.clone()))
+    Ok((repo_ns, backup.spec.repository_ref.clone()))
 }
 
 pub async fn delete_backup(state: &ApiState, namespace: &str, name: &str) -> ApiResult<()> {
     let api: Api<ProteusBackup> = Api::namespaced(state.client.clone(), namespace);
     let backup = api.get(name).await?;
 
-    let (repo_ns, repo_ref) = resolve_backup_repository(state, &backup, namespace).await?;
+    let (repo_ns, repo_ref) = resolve_backup_repository(state, &backup, namespace)
+        .await
+        .map_err(ApiError::Internal)?;
 
     // GC first: drop this backup's snapshot + orphans; keep other backups' objects.
     match gc_repository_after_backup_delete(state, namespace, name, &repo_ns, &repo_ref).await {
