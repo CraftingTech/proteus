@@ -72,11 +72,19 @@ pub struct BackupPolicyListItem {
     #[serde(default)]
     pub pvc_names: Vec<String>,
     pub schedule: Option<String>,
+    #[serde(default)]
+    pub paused: bool,
     pub keep_last: u32,
     #[serde(default)]
     pub max_age_days: Option<u32>,
     pub phase: Option<String>,
     pub message: Option<String>,
+    #[serde(default)]
+    pub next_run_at: Option<String>,
+    #[serde(default)]
+    pub last_schedule_time: Option<String>,
+    #[serde(default)]
+    pub last_run_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -89,6 +97,36 @@ pub struct CreateBackupPolicyRequest {
     pub repository_namespace: Option<String>,
     pub target_namespace: String,
     pub pvc_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_last: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchBackupPolicyRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_last: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulePreviewRequest {
+    pub schedule: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulePreviewResponse {
+    pub schedule: String,
+    pub next_run_at: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -113,6 +151,10 @@ pub struct BackupListItem {
     pub duration_seconds: Option<u64>,
     #[serde(default)]
     pub throughput_bytes_per_sec: Option<u64>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -323,6 +365,30 @@ pub async fn create_backup_policy(
     req: &CreateBackupPolicyRequest,
 ) -> Result<BackupPolicyListItem, ApiClientError> {
     send_json("POST", "/api/v1/backup-policies", req).await
+}
+
+pub async fn patch_backup_policy(
+    namespace: &str,
+    name: &str,
+    req: &PatchBackupPolicyRequest,
+) -> Result<BackupPolicyListItem, ApiClientError> {
+    let path = format!(
+        "/api/v1/backup-policies/{}/{}",
+        urlencoding_lite(namespace),
+        urlencoding_lite(name)
+    );
+    send_json("PATCH", &path, req).await
+}
+
+pub async fn preview_schedule(schedule: &str) -> Result<SchedulePreviewResponse, ApiClientError> {
+    send_json(
+        "POST",
+        "/api/v1/schedule/preview",
+        &SchedulePreviewRequest {
+            schedule: schedule.to_string(),
+        },
+    )
+    .await
 }
 
 pub async fn delete_backup_policy(namespace: &str, name: &str) -> Result<(), ApiClientError> {

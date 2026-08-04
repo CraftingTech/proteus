@@ -13,6 +13,7 @@ mod state;
 mod ui;
 
 pub use error::{ApiError, ApiResult};
+pub use resources::gc_repository_after_backup_delete;
 pub use routes::router;
 pub use state::{ApiState, ClusterSnapshot, REQUIRED_CRDS};
 

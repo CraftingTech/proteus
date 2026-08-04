@@ -17,8 +17,14 @@ spec:
     - jsonPath: .spec.repositoryRef
       name: Repository
       type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
     - jsonPath: .status.phase
       name: Phase
+      type: string
+    - jsonPath: .status.nextRunAt
+      name: Next
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -39,6 +45,10 @@ spec:
               labelSelector:
                 nullable: true
                 type: string
+              paused:
+                default: false
+                description: When true, scheduled ticks do not create runs (manual Run now still allowed).
+                type: boolean
               pvcNames:
                 description: PVCs to back up, by name, in `target_namespace`. Required, at least one.
                 items:
@@ -66,7 +76,7 @@ spec:
                     type: integer
                 type: object
               schedule:
-                description: Cron expression; unused until scheduled runs (#16).
+                description: 5-field crontab (`min hour dom month dow`) or 6-field with seconds; UTC.
                 nullable: true
                 type: string
               targetNamespace:
@@ -79,7 +89,19 @@ spec:
           status:
             nullable: true
             properties:
+              lastRunName:
+                description: Name of the last scheduled `ProteusBackup` run created by the controller.
+                nullable: true
+                type: string
+              lastScheduleTime:
+                description: When the controller last spawned a scheduled run (RFC3339 UTC).
+                nullable: true
+                type: string
               message:
+                nullable: true
+                type: string
+              nextRunAt:
+                description: Next scheduled fire time (RFC3339 UTC), when a schedule is set and not paused.
                 nullable: true
                 type: string
               phase:

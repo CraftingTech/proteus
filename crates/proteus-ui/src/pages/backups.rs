@@ -1,8 +1,127 @@
 use crate::api::{
     self, BackupListItem, CreateBackupPolicyRequest, CreateBackupRequest, CreateRestoreRequest,
-    RepositoryListItem,
+    PatchBackupPolicyRequest, RepositoryListItem,
 };
+use crate::Route;
 use dioxus::prelude::*;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SchedulePreset {
+    Off,
+    Hourly,
+    Daily,
+    Weekly,
+    Custom,
+}
+
+fn preset_cron(preset: SchedulePreset) -> Option<&'static str> {
+    match preset {
+        SchedulePreset::Off => None,
+        SchedulePreset::Hourly => Some("0 * * * *"),
+        SchedulePreset::Daily => Some("0 2 * * *"),
+        SchedulePreset::Weekly => Some("0 2 * * 0"),
+        SchedulePreset::Custom => None,
+    }
+}
+
+fn format_next_run(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "—".into();
+    }
+    // Keep it short in the row: drop seconds / timezone noise when RFC3339.
+    match trimmed.split_once('T') {
+        Some((date, rest)) => {
+            let time = rest.get(..5).unwrap_or(rest);
+            format!("{date} {time} UTC")
+        }
+        None => trimmed.to_string(),
+    }
+}
+
+/// Strip transport noise (`HTTP 400: bad request: …`) for form-facing copy.
+fn friendly_api_error(message: &str) -> String {
+    let mut msg = message.trim();
+    if let Some((_, rest)) = msg.split_once("bad request: ") {
+        msg = rest.trim();
+    } else if let Some((_, rest)) = msg.split_once(": ") {
+        // "HTTP 400: …"
+        if msg.starts_with("HTTP ") {
+            msg = rest.trim();
+            if let Some((_, rest)) = msg.split_once("bad request: ") {
+                msg = rest.trim();
+            }
+        }
+    }
+    msg.to_string()
+}
+
+fn form_schedule_cron(preset: SchedulePreset, custom: &str) -> Option<String> {
+    match preset {
+        SchedulePreset::Off => None,
+        SchedulePreset::Custom => {
+            let cron = custom.trim();
+            if cron.is_empty() {
+                None
+            } else {
+                Some(cron.to_string())
+            }
+        }
+        other => preset_cron(other).map(str::to_string),
+    }
+}
+
+fn format_run_count_label(count: usize) -> String {
+    if count > 10 {
+        "10+ runs".into()
+    } else if count == 1 {
+        "1 run".into()
+    } else {
+        format!("{count} runs")
+    }
+}
+
+/// Collapse runs by policy (ns + policyRef); orphan/inline runs stay one-per-row.
+/// Latest prefers active (Running/Pending), then newest name (timestamp suffix).
+fn group_runs_for_list(items: &[BackupListItem]) -> Vec<(&BackupListItem, usize)> {
+    use std::collections::BTreeMap;
+
+    let mut groups: BTreeMap<(String, String), Vec<&BackupListItem>> = BTreeMap::new();
+    for item in items {
+        let key = match item
+            .policy_ref
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(policy) => (item.namespace.clone(), format!("policy:{policy}")),
+            None => (item.namespace.clone(), format!("run:{}", item.name)),
+        };
+        groups.entry(key).or_default().push(item);
+    }
+
+    let mut out: Vec<(&BackupListItem, usize)> = groups
+        .into_values()
+        .map(|mut runs| {
+            runs.sort_by(|a, b| {
+                let rank = |p: Option<&str>| match p {
+                    Some("Running") => 0,
+                    Some("Pending") => 1,
+                    _ => 2,
+                };
+                rank(a.phase.as_deref())
+                    .cmp(&rank(b.phase.as_deref()))
+                    .then_with(|| b.name.cmp(&a.name))
+            });
+            let count = runs.len();
+            let latest = runs[0];
+            (latest, count)
+        })
+        .collect();
+
+    out.sort_by(|a, b| b.0.name.cmp(&a.0.name));
+    out
+}
 
 fn confirm_delete(kind: &str, name: &str, namespace: &str) -> bool {
     let msg = format!("Delete {kind} {name} in namespace {namespace}?");
@@ -89,12 +208,16 @@ fn format_throughput(bps: u64) -> String {
 
 #[component]
 pub fn Backups() -> Element {
+    let navigator = use_navigator();
     let mut refresh_tick = use_signal(|| 0u32);
     let mut show_form = use_signal(|| false);
     let mut name = use_signal(String::new);
     let mut namespace = use_signal(|| "default".to_string());
     let mut selected_repo = use_signal(String::new);
     let mut selected_pvcs = use_signal(Vec::<String>::new);
+    let mut schedule_preset = use_signal(|| SchedulePreset::Off);
+    let mut custom_cron = use_signal(|| "0 2 * * *".to_string());
+    let mut keep_last = use_signal(|| "7".to_string());
     let mut form_error = use_signal(|| Option::<String>::None);
     let mut form_busy = use_signal(|| false);
     let mut action_error = use_signal(|| Option::<String>::None);
@@ -173,6 +296,19 @@ pub fn Backups() -> Element {
         async move { api::list_backups().await }
     });
 
+    let schedule_preview = use_resource(move || {
+        let cron = form_schedule_cron(schedule_preset(), &custom_cron());
+        async move {
+            let Some(cron) = cron else {
+                return Ok::<Option<String>, api::ApiClientError>(None);
+            };
+            match api::preview_schedule(&cron).await {
+                Ok(res) => Ok(Some(res.next_run_at)),
+                Err(err) => Err(err),
+            }
+        }
+    });
+
     // Poll while any backup is still Pending/Running.
     use_effect(move || {
         let needs_poll = match &*backups.read_unchecked() {
@@ -220,7 +356,7 @@ pub fn Backups() -> Element {
     });
 
     let mut show_restore_form = use_signal(|| false);
-    let mut restore_name = use_signal(String::new);
+    let mut restore_cr_name = use_signal(String::new);
     let mut restore_namespace = use_signal(|| "default".to_string());
     let mut selected_backup = use_signal(String::new);
     let mut restore_snapshot_id = use_signal(String::new);
@@ -264,7 +400,7 @@ pub fn Backups() -> Element {
         restore_form_error.set(None);
         action_error.set(None);
 
-        let r_name = restore_name().trim().to_string();
+        let r_name = restore_cr_name().trim().to_string();
         let r_ns = restore_namespace().trim().to_string();
         let backup_value = selected_backup().trim().to_string();
         let snapshot_id = restore_snapshot_id().trim().to_string();
@@ -300,7 +436,7 @@ pub fn Backups() -> Element {
         spawn(async move {
             match api::create_restore(&req).await {
                 Ok(_) => {
-                    restore_name.set(String::new());
+                    restore_cr_name.set(String::new());
                     restore_snapshot_id.set(String::new());
                     restore_overwrite.set(false);
                     show_restore_form.set(false);
@@ -344,6 +480,25 @@ pub fn Backups() -> Element {
             return;
         }
 
+        let schedule = match schedule_preset() {
+            SchedulePreset::Off => None,
+            SchedulePreset::Custom => {
+                let cron = custom_cron().trim().to_string();
+                if cron.is_empty() {
+                    form_error.set(Some("custom cron is required".into()));
+                    return;
+                }
+                Some(cron)
+            }
+            preset => preset_cron(preset).map(str::to_string),
+        };
+
+        let keep = keep_last().trim().parse::<u32>().unwrap_or(0);
+        if keep == 0 {
+            form_error.set(Some("keepLast must be >= 1".into()));
+            return;
+        }
+
         let req = CreateBackupPolicyRequest {
             name: policy_name,
             namespace: policy_ns.clone(),
@@ -351,6 +506,9 @@ pub fn Backups() -> Element {
             repository_namespace: Some(repo_ns),
             target_namespace: policy_ns,
             pvc_names: pvcs,
+            schedule,
+            paused: None,
+            keep_last: Some(keep),
         };
 
         form_busy.set(true);
@@ -359,6 +517,9 @@ pub fn Backups() -> Element {
                 Ok(_) => {
                     name.set(String::new());
                     selected_pvcs.set(Vec::new());
+                    schedule_preset.set(SchedulePreset::Off);
+                    custom_cron.set("0 2 * * *".into());
+                    keep_last.set("7".into());
                     show_form.set(false);
                     form_busy.set(false);
                     refresh_tick.set(refresh_tick() + 1);
@@ -496,6 +657,90 @@ pub fn Backups() -> Element {
                                 None => rsx! { span { class: "muted", "Loading PVCs…" } },
                             }
                         }
+
+                        label {
+                            span { "Schedule (UTC)" }
+                            select {
+                                value: match schedule_preset() {
+                                    SchedulePreset::Off => "off",
+                                    SchedulePreset::Hourly => "hourly",
+                                    SchedulePreset::Daily => "daily",
+                                    SchedulePreset::Weekly => "weekly",
+                                    SchedulePreset::Custom => "custom",
+                                },
+                                onchange: move |evt| {
+                                    schedule_preset.set(match evt.value().as_str() {
+                                        "hourly" => SchedulePreset::Hourly,
+                                        "daily" => SchedulePreset::Daily,
+                                        "weekly" => SchedulePreset::Weekly,
+                                        "custom" => SchedulePreset::Custom,
+                                        _ => SchedulePreset::Off,
+                                    });
+                                },
+                                option { value: "off", "Off" }
+                                option { value: "hourly", "Hourly" }
+                                option { value: "daily", "Daily 02:00" }
+                                option { value: "weekly", "Weekly Sun 02:00" }
+                                option { value: "custom", "Custom cron" }
+                            }
+                        }
+                        if schedule_preset() == SchedulePreset::Custom {
+                            label {
+                                span { "Cron (min hour dom month dow)" }
+                                {
+                                    let cron_invalid = matches!(
+                                        &*schedule_preview.read_unchecked(),
+                                        Some(Err(_))
+                                    );
+                                    rsx! {
+                                        input {
+                                            r#type: "text",
+                                            class: if cron_invalid { "input-invalid" } else { "" },
+                                            value: "{custom_cron}",
+                                            placeholder: "0 2 * * *",
+                                            oninput: move |evt| custom_cron.set(evt.value()),
+                                        }
+                                    }
+                                }
+                                if let Some(Err(err)) = &*schedule_preview.read_unchecked() {
+                                    span { class: "field-error",
+                                        "{friendly_api_error(&err.message)}"
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "form-span-2 field-block",
+                            span { class: "field-label", "Next run (UTC)" }
+                            match schedule_preset() {
+                                SchedulePreset::Off => rsx! {
+                                    span { class: "muted", "No schedule — use Run now only." }
+                                },
+                                _ => match &*schedule_preview.read_unchecked() {
+                                    None => rsx! { span { class: "muted", "Computing next run…" } },
+                                    Some(Ok(Some(next))) => rsx! {
+                                        span { class: "pill pill-ok", title: "Next fire time",
+                                            "{format_next_run(next)}"
+                                        }
+                                    },
+                                    Some(Ok(None)) => rsx! {
+                                        span { class: "muted", "Enter a cron expression." }
+                                    },
+                                    Some(Err(_)) => rsx! {
+                                        span { class: "muted", "Fix the cron above to see the next run." }
+                                    },
+                                },
+                            }
+                        }
+                        label {
+                            span { "keepLast" }
+                            input {
+                                r#type: "number",
+                                min: "1",
+                                value: "{keep_last}",
+                                oninput: move |evt| keep_last.set(evt.value()),
+                            }
+                            span { class: "field-hint muted", "Succeeded runs to retain." }
+                        }
                     }
 
                     if let Some(err) = form_error() {
@@ -548,37 +793,41 @@ pub fn Backups() -> Element {
                                 {
                                     let item_name = item.name.clone();
                                     let item_ns = item.namespace.clone();
+                                    let runs_ns = item.namespace.clone();
+                                    let runs_name = item.name.clone();
                                     let run_name = item.name.clone();
                                     let run_ns = item.namespace.clone();
+                                    let pause_name = item.name.clone();
+                                    let pause_ns = item.namespace.clone();
                                     let message = item.message.clone().unwrap_or_default();
                                     let pvcs = item.pvc_names.join(", ");
                                     let can_run = item.phase.as_deref() == Some("Ready");
+                                    let paused = item.paused;
+                                    let has_schedule = item
+                                        .schedule
+                                        .as_deref()
+                                        .map(str::trim)
+                                        .is_some_and(|s| !s.is_empty());
+                                    let schedule_label = item
+                                        .schedule
+                                        .clone()
+                                        .unwrap_or_else(|| "off".into());
+                                    let next_label = item
+                                        .next_run_at
+                                        .as_deref()
+                                        .map(format_next_run);
                                     rsx! {
                                         div { class: "resource-row",
                                             div { class: "resource-id",
                                                 span { class: "resource-ns", "{item.namespace}" }
-                                                span { class: "resource-name", "{item.name}" }
-                                            }
-                                            div { class: "resource-detail",
-                                                div { class: "resource-line",
-                                                    span { title: "Repository", "{item.repository_ref}" }
-                                                    span {
-                                                        class: "pill",
-                                                        title: "Target namespace",
-                                                        "{item.target_namespace}"
-                                                    }
-                                                    if !pvcs.is_empty() {
-                                                        span {
-                                                            class: "pill",
-                                                            title: "PVCs: {pvcs}",
-                                                            "{pvcs}"
-                                                        }
-                                                    }
-                                                    span {
-                                                        class: "pill",
-                                                        title: "Retention keepLast",
-                                                        "keep {item.keep_last}"
-                                                    }
+                                                Link {
+                                                    to: Route::PolicyRuns {
+                                                        namespace: runs_ns,
+                                                        name: runs_name,
+                                                    },
+                                                    class: "resource-name resource-name-link",
+                                                    title: "View all runs for this policy",
+                                                    "{item.name}"
                                                 }
                                             }
                                             div {
@@ -592,17 +841,14 @@ pub fn Backups() -> Element {
                                                     },
                                                     "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
                                                 }
-                                                if !message.is_empty() {
-                                                    span { class: "status-msg muted", "{message}" }
-                                                }
                                             }
                                             div { class: "resource-actions",
                                                 button {
-                                                    class: "btn",
+                                                    class: "btn btn-icon",
                                                     r#type: "button",
                                                     disabled: !can_run,
                                                     title: if can_run {
-                                                        "Create a backup run from this policy"
+                                                        "Run now"
                                                     } else {
                                                         "Policy must be Ready before Run now"
                                                     },
@@ -625,10 +871,49 @@ pub fn Backups() -> Element {
                                                             }
                                                         });
                                                     },
-                                                    "Run now"
+                                                    "▶"
+                                                }
+                                                if has_schedule {
+                                                    button {
+                                                        class: "btn btn-icon",
+                                                        r#type: "button",
+                                                        title: if paused {
+                                                            "Resume schedule"
+                                                        } else {
+                                                            "Pause schedule"
+                                                        },
+                                                        onclick: move |_| {
+                                                            action_error.set(None);
+                                                            let ns = pause_ns.clone();
+                                                            let name = pause_name.clone();
+                                                            let next_paused = !paused;
+                                                            spawn(async move {
+                                                                let req = PatchBackupPolicyRequest {
+                                                                    schedule: None,
+                                                                    paused: Some(next_paused),
+                                                                    keep_last: None,
+                                                                };
+                                                                match api::patch_backup_policy(
+                                                                    &ns, &name, &req,
+                                                                )
+                                                                .await
+                                                                {
+                                                                    Ok(_) => {
+                                                                        refresh_tick
+                                                                            .set(refresh_tick() + 1);
+                                                                    }
+                                                                    Err(err) => {
+                                                                        action_error
+                                                                            .set(Some(err.message));
+                                                                    }
+                                                                }
+                                                            });
+                                                        },
+                                                        if paused { "⏵" } else { "⏸" }
+                                                    }
                                                 }
                                                 button {
-                                                    class: "btn btn-danger",
+                                                    class: "btn btn-icon btn-danger",
                                                     r#type: "button",
                                                     title: "Delete policy",
                                                     onclick: move |_| {
@@ -658,7 +943,54 @@ pub fn Backups() -> Element {
                                                             }
                                                         });
                                                     },
-                                                    "Delete"
+                                                    "✕"
+                                                }
+                                            }
+                                            div { class: "resource-detail",
+                                                div { class: "resource-line",
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Repository",
+                                                        "{item.repository_ref}"
+                                                    }
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Target namespace",
+                                                        "ns:{item.target_namespace}"
+                                                    }
+                                                    if !pvcs.is_empty() {
+                                                        span {
+                                                            class: "pill",
+                                                            title: "PVCs: {pvcs}",
+                                                            "{pvcs}"
+                                                        }
+                                                    }
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Cron schedule (UTC)",
+                                                        "cron:{schedule_label}"
+                                                    }
+                                                    if has_schedule && paused {
+                                                        span {
+                                                            class: "pill",
+                                                            title: "Schedule paused",
+                                                            "paused"
+                                                        }
+                                                    }
+                                                    if has_schedule {
+                                                        if let Some(next) = next_label.clone() {
+                                                            span {
+                                                                class: "pill",
+                                                                title: "Next scheduled run",
+                                                                "next {next}"
+                                                            }
+                                                        }
+                                                    }
+                                                    span {
+                                                        class: "pill",
+                                                        title: "Retention keepLast",
+                                                        "keep {item.keep_last}"
+                                                    }
                                                 }
                                             }
                                         }
@@ -685,142 +1017,231 @@ pub fn Backups() -> Element {
                         p { "{err}" }
                     }
                 },
-                Some(Ok(items)) => rsx! {
-                    div { class: "panel resource-list",
-                        if items.is_empty() {
-                            p { class: "muted empty-state", "No backup runs yet." }
-                        } else {
-                            for item in items.iter() {
-                                {
-                                    let item_name = item.name.clone();
-                                    let item_ns = item.namespace.clone();
-                                    let has_snapshot = item
-                                        .last_snapshot_id
-                                        .as_deref()
-                                        .map(str::trim)
-                                        .is_some_and(|s| !s.is_empty());
-                                    let progress = item.progress_percent.unwrap_or(0);
-                                    let show_progress = matches!(
-                                        item.phase.as_deref(),
-                                        Some("Running") | Some("Pending")
-                                    );
-                                    let message = item.message.clone().unwrap_or_default();
-                                    let snap_full = item
-                                        .last_snapshot_id
-                                        .clone()
-                                        .unwrap_or_default();
-                                    let snap_short = if snap_full.is_empty() {
-                                        String::new()
-                                    } else {
-                                        short_id(&snap_full, 12)
-                                    };
-                                    let pvcs = item.pvc_names.join(", ");
-                                    let policy = item.policy_ref.clone().unwrap_or_default();
-                                    rsx! {
-                                        div { class: "resource-row",
-                                            div { class: "resource-id",
-                                                span { class: "resource-ns", "{item.namespace}" }
-                                                span { class: "resource-name", "{item.name}" }
-                                            }
-                                            div { class: "resource-detail",
-                                                div { class: "resource-line",
-                                                    if !policy.is_empty() {
-                                                        span {
-                                                            class: "pill",
-                                                            title: "Policy",
-                                                            "policy:{policy}"
-                                                        }
-                                                    }
-                                                    span { title: "Repository", "{item.repository_ref}" }
-                                                    if !pvcs.is_empty() {
-                                                        span {
-                                                            class: "pill",
-                                                            title: "PVCs: {pvcs}",
-                                                            "{pvcs}"
-                                                        }
-                                                    }
-                                                }
-                                                div { class: "resource-line",
-                                                    if snap_short.is_empty() {
-                                                        span { "No snapshot yet" }
-                                                    } else {
-                                                        code {
-                                                            class: "mono-id",
-                                                            title: "{snap_full}",
-                                                            "{snap_short}"
-                                                        }
-                                                    }
-                                                    if let Some(secs) = item.duration_seconds {
-                                                        span {
-                                                            class: "pill",
-                                                            title: "Duration",
-                                                            "{secs}s"
-                                                        }
-                                                    }
-                                                    if let Some(bps) = item.throughput_bytes_per_sec {
-                                                        span {
-                                                            class: "pill",
-                                                            title: "Throughput",
-                                                            "{format_throughput(bps)}"
-                                                        }
-                                                    }
-                                                }
-                                            }
+                Some(Ok(items)) => {
+                    let groups = group_runs_for_list(items);
+                    rsx! {
+                        div { class: "panel resource-list",
+                            if groups.is_empty() {
+                                p { class: "muted empty-state", "No backup runs yet." }
+                            } else {
+                                for (item, run_count) in groups.iter() {
+                                    {
+                                        let item_name = item.name.clone();
+                                        let item_ns = item.namespace.clone();
+                                        let restore_run = item.name.clone();
+                                        let restore_ns = item.namespace.clone();
+                                        let policy_ns = item.namespace.clone();
+                                        let policy_name =
+                                            item.policy_ref.clone().unwrap_or_default();
+                                        let has_snapshot = item
+                                            .last_snapshot_id
+                                            .as_deref()
+                                            .map(str::trim)
+                                            .is_some_and(|s| !s.is_empty());
+                                        let can_restore =
+                                            item.phase.as_deref() == Some("Succeeded");
+                                        let progress = item.progress_percent.unwrap_or(0);
+                                        let show_progress = matches!(
+                                            item.phase.as_deref(),
+                                            Some("Running") | Some("Pending")
+                                        );
+                                        let message =
+                                            item.message.clone().unwrap_or_default();
+                                        let snap_full = item
+                                            .last_snapshot_id
+                                            .clone()
+                                            .unwrap_or_default();
+                                        let snap_short = if snap_full.is_empty() {
+                                            String::new()
+                                        } else {
+                                            short_id(&snap_full, 12)
+                                        };
+                                        let pvcs = item.pvc_names.join(", ");
+                                        let policy =
+                                            item.policy_ref.clone().unwrap_or_default();
+                                        let count_label = format_run_count_label(*run_count);
+                                        let open_history = !policy_name.is_empty();
+                                        let history_ns = policy_ns.clone();
+                                        let history_name = policy_name.clone();
+                                        let row_class = if open_history {
+                                            "resource-row resource-row-clickable"
+                                        } else {
+                                            "resource-row"
+                                        };
+                                        let row_title = if open_history {
+                                            "View all runs for this policy"
+                                        } else {
+                                            ""
+                                        };
+                                        rsx! {
                                             div {
-                                                class: "resource-status",
-                                                title: "{message}",
-                                                span {
-                                                    class: match item.phase.as_deref() {
-                                                        Some("Succeeded") => "badge phase-ready",
-                                                        Some("Failed") => "badge phase-failed",
-                                                        Some("Running") => "badge phase-running",
-                                                        _ => "badge",
-                                                    },
-                                                    "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                class: "{row_class}",
+                                                title: "{row_title}",
+                                                onclick: move |_| {
+                                                    if history_name.is_empty() {
+                                                        return;
+                                                    }
+                                                    navigator.push(Route::PolicyRuns {
+                                                        namespace: history_ns.clone(),
+                                                        name: history_name.clone(),
+                                                    });
+                                                },
+                                                div { class: "resource-id",
+                                                    span { class: "resource-ns", "{item.namespace}" }
+                                                    span { class: "resource-name", "{item.name}" }
                                                 }
-                                                if show_progress {
-                                                    div { class: "progress",
-                                                        div { class: "progress-track",
-                                                            div {
-                                                                class: "progress-bar",
-                                                                style: "width: {progress}%",
+                                                div {
+                                                    class: "resource-status",
+                                                    title: "{message}",
+                                                    span {
+                                                        class: match item.phase.as_deref() {
+                                                            Some("Succeeded") => "badge phase-ready",
+                                                            Some("Failed") => "badge phase-failed",
+                                                            Some("Running") => "badge phase-running",
+                                                            _ => "badge",
+                                                        },
+                                                        "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                    }
+                                                    if show_progress {
+                                                        div { class: "progress",
+                                                            div { class: "progress-track",
+                                                                div {
+                                                                    class: "progress-bar",
+                                                                    style: "width: {progress}%",
+                                                                }
                                                             }
+                                                            span { class: "progress-label", "{progress}%" }
                                                         }
-                                                        span { class: "progress-label", "{progress}%" }
                                                     }
                                                 }
-                                                if !message.is_empty() {
-                                                    span { class: "status-msg muted", "{message}" }
-                                                }
-                                            }
-                                            div { class: "resource-actions",
-                                                button {
-                                                    class: "btn btn-danger",
-                                                    r#type: "button",
-                                                    title: "Delete backup and its snapshot data",
-                                                    onclick: move |_| {
-                                                        if !confirm_delete_backup(
-                                                            &item_name,
-                                                            &item_ns,
-                                                            has_snapshot,
-                                                        ) {
-                                                            return;
-                                                        }
-                                                        let name = item_name.clone();
-                                                        let ns = item_ns.clone();
-                                                        spawn(async move {
-                                                            match api::delete_backup(&ns, &name).await {
-                                                                Ok(()) => {
-                                                                    action_error.set(None);
-                                                                    refresh_tick.set(refresh_tick() + 1);
-                                                                }
-                                                                Err(err) => {
-                                                                    action_error.set(Some(err.message));
-                                                                }
+                                                div {
+                                                    class: "resource-actions",
+                                                    // Keep Restore/Delete out of the row navigation.
+                                                    onclick: move |evt| evt.stop_propagation(),
+                                                    button {
+                                                        class: "btn",
+                                                        r#type: "button",
+                                                        disabled: !can_restore,
+                                                        title: if can_restore {
+                                                            "Restore from this latest run"
+                                                        } else {
+                                                            "Only Succeeded runs can be restored"
+                                                        },
+                                                        onclick: move |_| {
+                                                            if !can_restore {
+                                                                return;
                                                             }
-                                                        });
-                                                    },
-                                                    "✕"
+                                                            let backup_key = ns_name_value(
+                                                                &restore_ns,
+                                                                &restore_run,
+                                                            );
+                                                            let cr_name =
+                                                                format!("{restore_run}-restore");
+                                                            action_error.set(None);
+                                                            restore_form_error.set(None);
+                                                            selected_backup.set(backup_key);
+                                                            restore_namespace
+                                                                .set(restore_ns.clone());
+                                                            restore_cr_name.set(cr_name);
+                                                            restore_snapshot_id
+                                                                .set(String::new());
+                                                            restore_overwrite.set(false);
+                                                            show_restore_form.set(true);
+                                                            show_form.set(false);
+                                                        },
+                                                        "Restore"
+                                                    }
+                                                    button {
+                                                        class: "btn btn-icon btn-danger",
+                                                        r#type: "button",
+                                                        title: "Delete this latest run and its snapshot data",
+                                                        onclick: move |_| {
+                                                            if !confirm_delete_backup(
+                                                                &item_name,
+                                                                &item_ns,
+                                                                has_snapshot,
+                                                            ) {
+                                                                return;
+                                                            }
+                                                            let name = item_name.clone();
+                                                            let ns = item_ns.clone();
+                                                            spawn(async move {
+                                                                match api::delete_backup(
+                                                                    &ns, &name,
+                                                                )
+                                                                .await
+                                                                {
+                                                                    Ok(()) => {
+                                                                        action_error.set(None);
+                                                                        refresh_tick.set(
+                                                                            refresh_tick() + 1,
+                                                                        );
+                                                                    }
+                                                                    Err(err) => {
+                                                                        action_error.set(Some(
+                                                                            err.message,
+                                                                        ));
+                                                                    }
+                                                                }
+                                                            });
+                                                        },
+                                                        "✕"
+                                                    }
+                                                }
+                                                div { class: "resource-detail",
+                                                    div { class: "resource-line",
+                                                        if !policy.is_empty() {
+                                                            span {
+                                                                class: "pill",
+                                                                title: "Policy",
+                                                                "policy:{policy}"
+                                                            }
+                                                        }
+                                                        span {
+                                                            class: "pill",
+                                                            title: "Repository",
+                                                            "{item.repository_ref}"
+                                                        }
+                                                        if !pvcs.is_empty() {
+                                                            span {
+                                                                class: "pill",
+                                                                title: "PVCs: {pvcs}",
+                                                                "{pvcs}"
+                                                            }
+                                                        }
+                                                        if snap_short.is_empty() {
+                                                            span { class: "pill", "No snapshot yet" }
+                                                        } else {
+                                                            code {
+                                                                class: "mono-id pill",
+                                                                title: "{snap_full}",
+                                                                "{snap_short}"
+                                                            }
+                                                        }
+                                                        if let Some(secs) = item.duration_seconds {
+                                                            span {
+                                                                class: "pill",
+                                                                title: "Duration",
+                                                                "{secs}s"
+                                                            }
+                                                        }
+                                                        if let Some(bps) =
+                                                            item.throughput_bytes_per_sec
+                                                        {
+                                                            span {
+                                                                class: "pill",
+                                                                title: "Throughput",
+                                                                "{format_throughput(bps)}"
+                                                            }
+                                                        }
+                                                        if open_history {
+                                                            span {
+                                                                class: "pill",
+                                                                title: "Runs kept for this policy (open row for history)",
+                                                                "{count_label}"
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -842,23 +1263,26 @@ pub fn Backups() -> Element {
                             show_restore_form.set(!show_restore_form());
                             restore_form_error.set(None);
                         },
-                        if show_restore_form() { "Cancel" } else { "+ New restore" }
+                        if show_restore_form() { "Cancel" } else { "Advanced…" }
                     }
                 }
             }
 
             if show_restore_form() {
                 div { class: "panel form-panel",
-                    h2 { "New restore" }
+                    h2 { "Restore from backup run" }
+                    p { class: "muted field-hint",
+                        "Prefer the Restore button on a Succeeded run — this form is for overrides (snapshot id, overwrite, other namespace)."
+                    }
 
                     div { class: "form-grid",
                         label {
                             span { "Name" }
                             input {
                                 r#type: "text",
-                                value: "{restore_name}",
+                                value: "{restore_cr_name}",
                                 placeholder: "nightly-data-restore",
-                                oninput: move |evt| restore_name.set(evt.value()),
+                                oninput: move |evt| restore_cr_name.set(evt.value()),
                             }
                         }
                         label {
@@ -1006,35 +1430,35 @@ pub fn Backups() -> Element {
                                                     }
                                                 }
                                             }
-                                            div {
-                                                class: "resource-status",
-                                                title: "{message}",
-                                                span {
-                                                    class: match item.phase.as_deref() {
-                                                        Some("Succeeded") => "badge phase-ready",
-                                                        Some("Failed") => "badge phase-failed",
-                                                        Some("Running") => "badge phase-running",
-                                                        _ => "badge",
-                                                    },
-                                                    "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                div {
+                                                    class: "resource-status",
+                                                    title: "{message}",
+                                                    span {
+                                                        class: match item.phase.as_deref() {
+                                                            Some("Succeeded") => "badge phase-ready",
+                                                            Some("Failed") => "badge phase-failed",
+                                                            Some("Running") => "badge phase-running",
+                                                            _ => "badge",
+                                                        },
+                                                        "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                    }
+                                                    if !message.is_empty() {
+                                                        span { class: "status-msg muted", "{message}" }
+                                                    }
                                                 }
-                                                if !message.is_empty() {
-                                                    span { class: "status-msg muted", "{message}" }
-                                                }
-                                            }
-                                            div { class: "resource-actions",
-                                                button {
-                                                    class: "btn btn-danger",
-                                                    r#type: "button",
-                                                    title: "Delete restore",
-                                                    onclick: move |_| {
-                                                        if !confirm_delete(
-                                                            "restore",
-                                                            &item_name,
-                                                            &item_ns,
-                                                        ) {
-                                                            return;
-                                                        }
+                                                div { class: "resource-actions",
+                                                    button {
+                                                        class: "btn btn-danger",
+                                                        r#type: "button",
+                                                        title: "Delete restore",
+                                                        onclick: move |_| {
+                                                            if !confirm_delete(
+                                                                "restore",
+                                                                &item_name,
+                                                                &item_ns,
+                                                            ) {
+                                                                return;
+                                                            }
                                                         let name = item_name.clone();
                                                         let ns = item_ns.clone();
                                                         spawn(async move {
@@ -1065,5 +1489,77 @@ pub fn Backups() -> Element {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(name: &str, policy: Option<&str>, phase: &str) -> BackupListItem {
+        BackupListItem {
+            name: name.into(),
+            namespace: "ns".into(),
+            policy_ref: policy.map(str::to_string),
+            repository_ref: "repo".into(),
+            target_namespace: "ns".into(),
+            pvc_names: vec![],
+            schedule: None,
+            phase: Some(phase.into()),
+            message: None,
+            last_snapshot_id: None,
+            progress_percent: None,
+            duration_seconds: None,
+            throughput_bytes_per_sec: None,
+            started_at: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn format_run_count_label_caps_at_ten_plus() {
+        assert_eq!(format_run_count_label(1), "1 run");
+        assert_eq!(format_run_count_label(3), "3 runs");
+        assert_eq!(format_run_count_label(11), "10+ runs");
+    }
+
+    #[test]
+    fn friendly_api_error_strips_http_prefix() {
+        assert_eq!(
+            friendly_api_error(
+                "HTTP 400: bad request: schedule must have 5 or 6 fields (got 4); example: '0 2 * * *'"
+            ),
+            "schedule must have 5 or 6 fields (got 4); example: '0 2 * * *'"
+        );
+    }
+
+    #[test]
+    fn group_runs_keeps_latest_per_policy() {
+        let items = vec![
+            run("p-20260804044729", Some("p"), "Succeeded"),
+            run("p-20260804044744", Some("p"), "Succeeded"),
+            run("p-20260804044737", Some("p"), "Succeeded"),
+            run("other-1", Some("other"), "Succeeded"),
+        ];
+        let groups = group_runs_for_list(&items);
+        assert_eq!(groups.len(), 2);
+        let p = groups
+            .iter()
+            .find(|(i, _)| i.policy_ref.as_deref() == Some("p"))
+            .expect("p");
+        assert_eq!(p.0.name, "p-20260804044744");
+        assert_eq!(p.1, 3);
+        assert_eq!(format_run_count_label(p.1), "3 runs");
+    }
+
+    #[test]
+    fn group_runs_prefers_active_over_newer_succeeded() {
+        let items = vec![
+            run("p-20260804050000", Some("p"), "Succeeded"),
+            run("p-20260804040000", Some("p"), "Running"),
+        ];
+        let groups = group_runs_for_list(&items);
+        assert_eq!(groups[0].0.name, "p-20260804040000");
+        assert_eq!(groups[0].1, 2);
     }
 }

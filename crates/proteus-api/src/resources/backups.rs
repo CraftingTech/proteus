@@ -33,6 +33,12 @@ pub struct BackupListItem {
     pub duration_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub throughput_bytes_per_sec: Option<u64>,
+    /// When the run started (status.startedAt, RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// CR creation time (metadata.creationTimestamp, RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -78,6 +84,12 @@ fn backup_list_item(obj: &ProteusBackup) -> BackupListItem {
         progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
         duration_seconds: obj.status.as_ref().and_then(|s| s.duration_seconds),
         throughput_bytes_per_sec: obj.status.as_ref().and_then(|s| s.throughput_bytes_per_sec),
+        started_at: obj.status.as_ref().and_then(|s| s.started_at.clone()),
+        created_at: obj
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .map(|t| t.0.to_rfc3339()),
     }
 }
 
@@ -88,16 +100,7 @@ pub async fn list_backups(state: &ApiState) -> ApiResult<Vec<BackupListItem>> {
 }
 
 fn generate_run_name(policy_name: &str) -> String {
-    let stamp = Utc::now().format("%Y%m%d%H%M%S");
-    let base = format!("{policy_name}-{stamp}");
-    // DNS-1123 subdomain: max 63 chars.
-    if base.len() <= 63 {
-        base
-    } else {
-        let keep = 63usize.saturating_sub(1 + stamp.to_string().len());
-        let prefix: String = policy_name.chars().take(keep).collect();
-        format!("{prefix}-{stamp}")
-    }
+    proteus_core::backup_run_name(policy_name, Utc::now())
 }
 
 pub fn build_inline_backup(req: &CreateBackupRequest) -> ApiResult<(String, ProteusBackup)> {
@@ -384,6 +387,7 @@ mod tests {
                 pvc_names: vec!["data".into()],
                 label_selector: None,
                 schedule: None,
+                paused: false,
                 retention: RetentionPolicy {
                     keep_last: 3,
                     max_age_days: None,
