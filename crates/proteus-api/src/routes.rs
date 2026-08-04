@@ -14,9 +14,10 @@ use crate::resources::{
     create_backup, create_backup_policy, create_repository, create_restore, delete_backup,
     delete_backup_policy, delete_repository, delete_restore, get_repository, list_backup_policies,
     list_backups, list_repositories, list_restores, patch_backup_policy, patch_repository,
-    BackupListItem, BackupPolicyListItem, CreateBackupPolicyRequest, CreateBackupRequest,
-    CreateRepositoryRequest, CreateRestoreRequest, PatchBackupPolicyRequest,
-    PatchRepositoryRequest, RepositoryListItem, RestoreListItem,
+    preview_schedule, BackupListItem, BackupPolicyListItem, CreateBackupPolicyRequest,
+    CreateBackupRequest, CreateRepositoryRequest, CreateRestoreRequest, PatchBackupPolicyRequest,
+    PatchRepositoryRequest, RepositoryListItem, RestoreListItem, SchedulePreviewRequest,
+    SchedulePreviewResponse,
 };
 use crate::state::{ApiState, ClusterSnapshot};
 use crate::ui::static_handler;
@@ -74,6 +75,10 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/inventory", get(inventory))
         .route("/api/v1/namespaces", get(namespaces))
+        .route(
+            "/api/v1/schedule/preview",
+            axum::routing::post(schedule_preview_handler),
+        )
         .route("/metrics", get(metrics_placeholder))
         .fallback(static_handler)
         .layer(cors)
@@ -144,6 +149,12 @@ async fn delete_repository_handler(
 ) -> ApiResult<StatusCode> {
     delete_repository(&state, &namespace, &name).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn schedule_preview_handler(
+    Json(body): Json<SchedulePreviewRequest>,
+) -> ApiResult<Json<SchedulePreviewResponse>> {
+    Ok(Json(preview_schedule(body)?))
 }
 
 async fn backup_policies(

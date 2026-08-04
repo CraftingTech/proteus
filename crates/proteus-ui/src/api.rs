@@ -116,6 +116,19 @@ pub struct PatchBackupPolicyRequest {
     pub keep_last: Option<u32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulePreviewRequest {
+    pub schedule: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulePreviewResponse {
+    pub schedule: String,
+    pub next_run_at: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupListItem {
@@ -138,6 +151,10 @@ pub struct BackupListItem {
     pub duration_seconds: Option<u64>,
     #[serde(default)]
     pub throughput_bytes_per_sec: Option<u64>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -361,6 +378,17 @@ pub async fn patch_backup_policy(
         urlencoding_lite(name)
     );
     send_json("PATCH", &path, req).await
+}
+
+pub async fn preview_schedule(schedule: &str) -> Result<SchedulePreviewResponse, ApiClientError> {
+    send_json(
+        "POST",
+        "/api/v1/schedule/preview",
+        &SchedulePreviewRequest {
+            schedule: schedule.to_string(),
+        },
+    )
+    .await
 }
 
 pub async fn delete_backup_policy(namespace: &str, name: &str) -> Result<(), ApiClientError> {

@@ -4,6 +4,7 @@ mod common;
 mod repo_store;
 mod repositories;
 mod restores;
+mod schedule;
 mod secrets;
 
 pub use backup_policies::{
@@ -21,3 +22,4 @@ pub use repositories::{
 pub use restores::{
     create_restore, delete_restore, list_restores, CreateRestoreRequest, RestoreListItem,
 };
+pub use schedule::{preview_schedule, SchedulePreviewRequest, SchedulePreviewResponse};

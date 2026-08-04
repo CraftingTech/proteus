@@ -33,6 +33,12 @@ pub struct BackupListItem {
     pub duration_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub throughput_bytes_per_sec: Option<u64>,
+    /// When the run started (status.startedAt, RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// CR creation time (metadata.creationTimestamp, RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -78,6 +84,12 @@ fn backup_list_item(obj: &ProteusBackup) -> BackupListItem {
         progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
         duration_seconds: obj.status.as_ref().and_then(|s| s.duration_seconds),
         throughput_bytes_per_sec: obj.status.as_ref().and_then(|s| s.throughput_bytes_per_sec),
+        started_at: obj.status.as_ref().and_then(|s| s.started_at.clone()),
+        created_at: obj
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .map(|t| t.0.to_rfc3339()),
     }
 }
 
