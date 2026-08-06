@@ -16,13 +16,19 @@ env:
 # Native per-arch builds (no QEMU): ubuntu-latest → amd64, ubuntu-24.04-arm → arm64,
 # then merge digests into one multi-arch manifest. ARM runners cost more Actions
 # minutes but cut wall-clock vs emulated multi-platform builds on a single job.
-# BoringCache uses each native runner's platform scope. Cache failures stay
-# non-fatal so a successful GHCR push remains green.
+# Opt in with the repository variable BORINGCACHE_ENABLED=true and BoringCache
+# workspace tokens stored as Actions secrets: BORINGCACHE_RESTORE_TOKEN reads;
+# BORINGCACHE_SAVE_TOKEN writes on trusted pushes. Otherwise Buildx keeps the
+# existing GHA cache for OSS forks and contributors.
+# BoringCache owns builder/build/cache/push; Proteus keeps GHCR login, metadata,
+# digest artifacts, and the multi-arch manifest merge.
 
 jobs:
   build:
     name: build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    env:
+      BORINGCACHE_ENABLED: ${{ vars.BORINGCACHE_ENABLED == 'true' && (secrets.BORINGCACHE_RESTORE_TOKEN != '' || (github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN != '')) && 'true' || 'false' }}
     permissions:
       contents: read
       packages: write
@@ -41,6 +47,10 @@ jobs:
           echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        if: env.BORINGCACHE_ENABLED != 'true'
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -61,8 +71,9 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push with BoringCache
-        id: build
-        uses: boringcache/one@62d929848c7c2f600dc721a849794f2cdca9c6cc # v1.16.7
+        if: env.BORINGCACHE_ENABLED == 'true'
+        id: build_boringcache
+        uses: boringcache/one@b372edd91cda127cb03c64967df35c3836d47f2a # v1.17.0
         with:
           trust-policy: auto
           setup: none
@@ -73,18 +84,33 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          docker-tool-cache: sccache:proteus-rust-main-image
+          docker-mount-cache: true
           fail-on-cache-error: false
-          metadata-hints: |
-            project=proteus
-            workflow=image
+          metadata-hints: workflow=image
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN || '' }}
 
+      - name: Build and push with GitHub Actions cache
+        if: env.BORINGCACHE_ENABLED != 'true'
+        id: build_default
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=min,scope=build-${{ env.PLATFORM_PAIR }}
+
       - name: Export digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build_boringcache.outputs.digest || steps.build_default.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
+          digest="$IMAGE_DIGEST"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
