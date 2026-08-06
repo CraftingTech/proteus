@@ -5,9 +5,11 @@ metadata-hints = ["project=proteus"]
 
 [adapters.docker]
 tag = "proteus-image-main"
+metadata-hints = ["tool=oci", "lane=image"]
 
 [adapters.sccache]
 tag = "proteus-rust-main-check"
+metadata-hints = ["tool=sccache", "lane=check"]
 
 [entries.cargo-target]
 tag = "proteus-rust-main-check-target"
