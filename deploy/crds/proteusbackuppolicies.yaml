@@ -1,27 +1,30 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: proteusbackups.proteus.io
+  name: proteusbackuppolicies.proteus.io
 spec:
   group: proteus.io
   names:
     categories: []
-    kind: ProteusBackup
-    plural: proteusbackups
+    kind: ProteusBackupPolicy
+    plural: proteusbackuppolicies
     shortNames:
-    - pbackup
-    singular: proteusbackup
+    - pbackuppolicy
+    singular: proteusbackuppolicy
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.policyRef
-      name: Policy
-      type: string
     - jsonPath: .spec.repositoryRef
       name: Repository
       type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
     - jsonPath: .status.phase
       name: Phase
+      type: string
+    - jsonPath: .status.nextRunAt
+      name: Next
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -29,10 +32,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for ProteusBackupSpec via `CustomResource`
+        description: Auto-generated derived type for ProteusBackupPolicySpec via `CustomResource`
         properties:
           spec:
-            description: One backup execution (run). Recipe fields may come from `policyRef` or inline (legacy).
             properties:
               includeClusterResources:
                 default: false
@@ -43,22 +45,20 @@ spec:
               labelSelector:
                 nullable: true
                 type: string
-              policyNamespace:
-                nullable: true
-                type: string
-              policyRef:
-                description: When set, the controller loads the recipe from this `ProteusBackupPolicy`.
-                nullable: true
-                type: string
+              paused:
+                default: false
+                description: When true, scheduled ticks do not create runs (manual Run now still allowed).
+                type: boolean
               pvcNames:
+                description: PVCs to back up, by name, in `target_namespace`. Required, at least one.
                 items:
                   type: string
+                minItems: 1
                 type: array
               repositoryNamespace:
                 nullable: true
                 type: string
               repositoryRef:
-                description: Inline recipe (legacy / compat). Ignored when `policyRef` is set.
                 type: string
               retention:
                 default:
@@ -76,70 +76,44 @@ spec:
                     type: integer
                 type: object
               schedule:
+                description: 5-field crontab (`min hour dom month dow`) or 6-field with seconds; UTC.
                 nullable: true
                 type: string
               targetNamespace:
                 type: string
+            required:
+            - pvcNames
+            - repositoryRef
+            - targetNamespace
             type: object
           status:
             nullable: true
             properties:
-              durationSeconds:
-                description: Wall-clock duration of a successful run, in seconds.
-                format: uint64
-                minimum: 0.0
-                nullable: true
-                type: integer
-              lastBytes:
-                format: uint64
-                minimum: 0.0
-                nullable: true
-                type: integer
-              lastFailureAt:
+              lastRunName:
+                description: Name of the last scheduled `ProteusBackup` run created by the controller.
                 nullable: true
                 type: string
-              lastSnapshotId:
-                nullable: true
-                type: string
-              lastSuccessAt:
+              lastScheduleTime:
+                description: When the controller last spawned a scheduled run (RFC3339 UTC).
                 nullable: true
                 type: string
               message:
                 nullable: true
                 type: string
+              nextRunAt:
+                description: Next scheduled fire time (RFC3339 UTC), when a schedule is set and not paused.
+                nullable: true
+                type: string
               phase:
                 enum:
-                - Pending
-                - Running
-                - Succeeded
-                - Failed
+                - Ready
+                - Invalid
                 nullable: true
                 type: string
-              progressPercent:
-                description: 0–100 while `phase` is Running; 100 on Succeeded.
-                format: uint8
-                minimum: 0.0
-                nullable: true
-                type: integer
-              retainedSnapshots:
-                format: uint32
-                minimum: 0.0
-                nullable: true
-                type: integer
-              startedAt:
-                description: When the current/last run started (RFC3339).
-                nullable: true
-                type: string
-              throughputBytesPerSec:
-                description: Approximate throughput of a successful run (`lastBytes / durationSeconds`).
-                format: uint64
-                minimum: 0.0
-                nullable: true
-                type: integer
             type: object
         required:
         - spec
-        title: ProteusBackup
+        title: ProteusBackupPolicy
         type: object
     served: true
     storage: true

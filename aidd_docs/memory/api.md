@@ -17,7 +17,11 @@ The HTTP API surface: its style, the main resources, and the contracts.
 - `GET /api/v1/repositories/{namespace}/{name}` — get one
 - `PATCH /api/v1/repositories/{namespace}/{name}` — patch description / encryption / backend
 - `DELETE /api/v1/repositories/{namespace}/{name}` — delete
-- `GET /api/v1/backups` — ProteusBackup list
+- `GET/POST /api/v1/backup-policies` — ProteusBackupPolicy list/create (recipe; does not start a run)
+- `DELETE /api/v1/backup-policies/{namespace}/{name}` — delete policy
+- `GET /api/v1/backups` — ProteusBackup runs list
+- `POST /api/v1/backups` — create run (`policyRef` preferred; inline recipe still accepted)
+- `DELETE /api/v1/backups/{namespace}/{name}` — delete run (+ CAS GC)
 - `GET /api/v1/restores` — ProteusRestore list
 - `GET /api/v1/inventory?namespace=&kind=&q=` — cluster inventory metadata (Deployments, Pods, Services, PVCs, ConfigMaps, Secrets); Secret values never returned
 - `GET /api/v1/namespaces` — namespace names for UI selectors

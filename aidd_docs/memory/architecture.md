@@ -42,6 +42,7 @@ Production bulk I/O is intended to run on the **node-agent** (and CSI snapshot p
 - Prefer one image with controller vs agent modes over a second unrelated image
 - Libraries use `thiserror`; only the binary edge uses `anyhow`
 - CRD API group `proteus.io`, version `v1alpha1` until GA
+- Backup recipe vs run: `ProteusBackupPolicy` (idempotent) + `ProteusBackup` (one execution, optional `policyRef`); schedules (#16) should spawn runs from policies
 
 ## Gotchas
 

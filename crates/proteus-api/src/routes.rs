@@ -11,10 +11,13 @@ use crate::error::ApiResult;
 use crate::inventory::{list_inventory, InventoryItem, InventoryQuery};
 use crate::namespaces::{list_namespaces, NamespaceItem};
 use crate::resources::{
-    create_backup, create_repository, create_restore, delete_backup, delete_repository,
-    delete_restore, get_repository, list_backups, list_repositories, list_restores,
-    patch_repository, BackupListItem, CreateBackupRequest, CreateRepositoryRequest,
-    CreateRestoreRequest, PatchRepositoryRequest, RepositoryListItem, RestoreListItem,
+    create_backup, create_backup_policy, create_repository, create_restore, delete_backup,
+    delete_backup_policy, delete_repository, delete_restore, get_repository, list_backup_policies,
+    list_backups, list_repositories, list_restores, patch_backup_policy, patch_repository,
+    preview_schedule, BackupListItem, BackupPolicyListItem, CreateBackupPolicyRequest,
+    CreateBackupRequest, CreateRepositoryRequest, CreateRestoreRequest, PatchBackupPolicyRequest,
+    PatchRepositoryRequest, RepositoryListItem, RestoreListItem, SchedulePreviewRequest,
+    SchedulePreviewResponse,
 };
 use crate::state::{ApiState, ClusterSnapshot};
 use crate::ui::static_handler;
@@ -49,6 +52,14 @@ pub fn router(state: ApiState) -> Router {
                 .patch(patch_repository_handler)
                 .delete(delete_repository_handler),
         )
+        .route(
+            "/api/v1/backup-policies",
+            get(backup_policies).post(create_backup_policy_handler),
+        )
+        .route(
+            "/api/v1/backup-policies/{namespace}/{name}",
+            axum::routing::patch(patch_backup_policy_handler).delete(delete_backup_policy_handler),
+        )
         .route("/api/v1/backups", get(backups).post(create_backup_handler))
         .route(
             "/api/v1/backups/{namespace}/{name}",
@@ -64,6 +75,10 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/inventory", get(inventory))
         .route("/api/v1/namespaces", get(namespaces))
+        .route(
+            "/api/v1/schedule/preview",
+            axum::routing::post(schedule_preview_handler),
+        )
         .route("/metrics", get(metrics_placeholder))
         .fallback(static_handler)
         .layer(cors)
@@ -133,6 +148,44 @@ async fn delete_repository_handler(
     Path((namespace, name)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     delete_repository(&state, &namespace, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn schedule_preview_handler(
+    Json(body): Json<SchedulePreviewRequest>,
+) -> ApiResult<Json<SchedulePreviewResponse>> {
+    Ok(Json(preview_schedule(body)?))
+}
+
+async fn backup_policies(
+    State(state): State<ApiState>,
+) -> ApiResult<Json<Vec<BackupPolicyListItem>>> {
+    Ok(Json(list_backup_policies(&state).await?))
+}
+
+async fn create_backup_policy_handler(
+    State(state): State<ApiState>,
+    Json(body): Json<CreateBackupPolicyRequest>,
+) -> ApiResult<(StatusCode, Json<BackupPolicyListItem>)> {
+    let item = create_backup_policy(&state, body).await?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn patch_backup_policy_handler(
+    State(state): State<ApiState>,
+    Path((namespace, name)): Path<(String, String)>,
+    Json(body): Json<PatchBackupPolicyRequest>,
+) -> ApiResult<Json<BackupPolicyListItem>> {
+    Ok(Json(
+        patch_backup_policy(&state, &namespace, &name, body).await?,
+    ))
+}
+
+async fn delete_backup_policy_handler(
+    State(state): State<ApiState>,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    delete_backup_policy(&state, &namespace, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

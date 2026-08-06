@@ -3,7 +3,9 @@
 
 pub mod progress;
 pub mod pvc_reader;
+pub mod recipe;
 pub mod repo;
+pub mod retention;
 
 use std::sync::Arc;
 
@@ -13,10 +15,11 @@ use proteus_crd::ProteusBackup;
 
 use self::progress::{format_bytes, map_range, BackupProgressSink};
 use self::pvc_reader::{BackupMountOwner, MountStage};
+use self::recipe::BackupRecipe;
 use self::repo::open_repository;
 use crate::controllers::ReconcileCtx;
 
-/// Stream every PVC named in `backup.spec.pvc_names` into the repository (no full-archive buffer).
+/// Stream every PVC named in `recipe.pvc_names` into the repository (no full-archive buffer).
 ///
 /// Progress bands (single PVC):
 /// - 0–5% open repository
@@ -25,6 +28,7 @@ use crate::controllers::ReconcileCtx;
 /// - 100% sealed (set by controller on Succeeded)
 pub async fn run_backup(
     backup: &ProteusBackup,
+    recipe: &BackupRecipe,
     ctx: &ReconcileCtx,
     backup_namespace: &str,
     progress: Arc<BackupProgressSink>,
@@ -34,8 +38,8 @@ pub async fn run_backup(
     let opened = open_repository(
         &ctx.client,
         backup_namespace,
-        &backup.spec.repository_ref,
-        backup.spec.repository_namespace.as_deref(),
+        &recipe.repository_ref,
+        recipe.repository_namespace.as_deref(),
     )
     .await?;
 
@@ -50,7 +54,7 @@ pub async fn run_backup(
     // Drop pods left by a previous interrupted run / controller restart.
     if let Err(err) = pvc_reader::cleanup_backup_mount_pods(
         &ctx.client,
-        &backup.spec.target_namespace,
+        &recipe.target_namespace,
         &owner.backup_name,
         &owner.backup_namespace,
     )
@@ -59,7 +63,7 @@ pub async fn run_backup(
         tracing::warn!(error = %err, "failed to cleanup leftover backup mount pods");
     }
 
-    let pvc_names = &backup.spec.pvc_names;
+    let pvc_names = &recipe.pvc_names;
     let pvc_count = pvc_names.len().max(1);
     let mut volume_snapshots = Vec::with_capacity(pvc_names.len());
     let mut total_bytes = 0u64;
@@ -77,7 +81,7 @@ pub async fn run_backup(
             let pvc_for_cb = pvc_label.clone();
             pvc_reader::stream_pvc_into_store(
                 &ctx.client,
-                &backup.spec.target_namespace,
+                &recipe.target_namespace,
                 pvc_name,
                 &owner,
                 opened.store.as_ref(),

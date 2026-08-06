@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use kube::CustomResourceExt;
-use proteus_crd::{ProteusBackup, ProteusRepository, ProteusRestore};
+use proteus_crd::{ProteusBackup, ProteusBackupPolicy, ProteusRepository, ProteusRestore};
 
 fn main() {
     let out_dir = std::env::args()
@@ -17,6 +17,7 @@ fn main() {
 
     let docs = [
         ("proteusrepositories.yaml", ProteusRepository::crd()),
+        ("proteusbackuppolicies.yaml", ProteusBackupPolicy::crd()),
         ("proteusbackups.yaml", ProteusBackup::crd()),
         ("proteusrestores.yaml", ProteusRestore::crd()),
     ];

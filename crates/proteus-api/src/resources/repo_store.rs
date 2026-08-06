@@ -5,11 +5,12 @@ use kube::{Api, ResourceExt};
 use proteus_core::{backup::gc_unreferenced, LocalBackend, ObjectStore, S3Backend, S3Config};
 use proteus_crd::{ProteusBackup, ProteusRepository, RepositoryBackend};
 
+use super::backups::resolve_backup_repository;
 use super::secrets::load_s3_credentials_for_api;
 use crate::state::{object_namespace, ApiState};
 
 /// Keep snapshots belonging to other backups that share the same repository; delete the rest.
-pub(crate) async fn gc_repository_after_backup_delete(
+pub async fn gc_repository_after_backup_delete(
     state: &ApiState,
     deleting_namespace: &str,
     deleting_name: &str,
@@ -29,21 +30,19 @@ pub(crate) async fn gc_repository_after_backup_delete(
         if other_ns == deleting_namespace && other_name == deleting_name {
             continue;
         }
-        let other_repo_ns = other
-            .spec
-            .repository_namespace
-            .as_deref()
-            .unwrap_or(other_ns.as_str());
-        if other.spec.repository_ref != repo_ref || other_repo_ns != repo_namespace {
+        let Ok((other_repo_ns, other_repo_ref)) =
+            resolve_backup_repository(state, other, &other_ns).await
+        else {
+            // Best-effort: if we cannot resolve, keep the snapshot to avoid data loss.
+            if let Some(id) = snapshot_id(other) {
+                keep_snapshots.push(id);
+            }
+            continue;
+        };
+        if other_repo_ref != repo_ref || other_repo_ns != repo_namespace {
             continue;
         }
-        if let Some(id) = other
-            .status
-            .as_ref()
-            .and_then(|s| s.last_snapshot_id.as_ref())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(id) = snapshot_id(other) {
             keep_snapshots.push(id);
         }
     }
@@ -52,6 +51,15 @@ pub(crate) async fn gc_repository_after_backup_delete(
     gc_unreferenced(store.as_ref(), &keep_snapshots)
         .await
         .map_err(|err| err.to_string())
+}
+
+fn snapshot_id(backup: &ProteusBackup) -> Option<String> {
+    backup
+        .status
+        .as_ref()
+        .and_then(|s| s.last_snapshot_id.as_ref())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 async fn open_repository_store(
