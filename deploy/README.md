@@ -34,6 +34,24 @@ CI builds each architecture on a **native** GitHub-hosted runner (`ubuntu-latest
 QEMU emulation (much faster wall-clock) at the cost of ARM Actions minutes. See
 `.github/workflows/image.yml`.
 
+### Optional CI cache (BoringCache)
+
+Image and check workflows stay **vendor-free by default** (Buildx + GHA cache /
+`Swatinem/rust-cache`). Maintainers may opt into [BoringCache](https://boringcache.com)
+for faster warm rebuilds without making forks or contributors depend on it.
+
+Opt-in (repository settings on `CraftingTech/proteus`):
+
+1. Variable `BORINGCACHE_ENABLED` = `true`
+2. Secret `BORINGCACHE_RESTORE_TOKEN` (read cache)
+3. Secret `BORINGCACHE_SAVE_TOKEN` (write cache on trusted non-PR pushes)
+
+Both the variable **and** at least one token must be present; otherwise CI keeps
+the GHA path. Cache failures on the BoringCache path are non-fatal so a successful
+GHCR push still finishes green. Workspace config lives in `.boringcache.toml`
+(`workspace = "craftingtech/proteus"`). Free-tier limits and account setup are
+owned by BoringCache — ask maintainers / see their OSS onboarding docs.
+
 Local build:
 
 ```bash
