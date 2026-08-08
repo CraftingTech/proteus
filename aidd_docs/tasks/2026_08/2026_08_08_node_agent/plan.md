@@ -1,6 +1,6 @@
 ---
 objective: "PVC backup and restore move bulk data on the node via DaemonSet agent + mover Pods; exec remains fallback; status records dataPlane."
-status: in-progress
+status: implemented
 issue: https://github.com/CraftingTech/proteus/issues/66
 ---
 

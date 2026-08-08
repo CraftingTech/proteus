@@ -155,6 +155,10 @@ pub struct BackupListItem {
     pub started_at: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+    #[serde(default)]
+    pub data_plane: Option<String>,
+    #[serde(default)]
+    pub assigned_node: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -179,6 +183,10 @@ pub struct RestoreListItem {
     pub message: Option<String>,
     #[serde(default)]
     pub restored_snapshot_id: Option<String>,
+    #[serde(default)]
+    pub data_plane: Option<String>,
+    #[serde(default)]
+    pub assigned_node: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

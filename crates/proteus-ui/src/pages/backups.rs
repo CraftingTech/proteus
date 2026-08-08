@@ -1047,6 +1047,14 @@ pub fn Backups() -> Element {
                                         );
                                         let message =
                                             item.message.clone().unwrap_or_default();
+                                        let plane = item.data_plane.clone().unwrap_or_default();
+                                        let plane_title = match item.assigned_node.as_deref() {
+                                            Some(node) if !plane.is_empty() => {
+                                                format!("dataPlane={plane} node={node}")
+                                            }
+                                            _ if !plane.is_empty() => format!("dataPlane={plane}"),
+                                            _ => String::new(),
+                                        };
                                         let snap_full = item
                                             .last_snapshot_id
                                             .clone()
@@ -1101,6 +1109,13 @@ pub fn Backups() -> Element {
                                                             _ => "badge",
                                                         },
                                                         "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                    }
+                                                    if !plane.is_empty() {
+                                                        span {
+                                                            class: "pill",
+                                                            title: "{plane_title}",
+                                                            "{plane}"
+                                                        }
                                                     }
                                                     if show_progress {
                                                         div { class: "progress",
@@ -1394,6 +1409,14 @@ pub fn Backups() -> Element {
                                     let item_name = item.name.clone();
                                     let item_ns = item.namespace.clone();
                                     let message = item.message.clone().unwrap_or_default();
+                                    let plane = item.data_plane.clone().unwrap_or_default();
+                                    let plane_title = match item.assigned_node.as_deref() {
+                                        Some(node) if !plane.is_empty() => {
+                                            format!("dataPlane={plane} node={node}")
+                                        }
+                                        _ if !plane.is_empty() => format!("dataPlane={plane}"),
+                                        _ => String::new(),
+                                    };
                                     let snap_full = item
                                         .restored_snapshot_id
                                         .clone()
@@ -1441,6 +1464,13 @@ pub fn Backups() -> Element {
                                                             _ => "badge",
                                                         },
                                                         "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                    }
+                                                    if !plane.is_empty() {
+                                                        span {
+                                                            class: "pill",
+                                                            title: "{plane_title}",
+                                                            "{plane}"
+                                                        }
                                                     }
                                                     if !message.is_empty() {
                                                         span { class: "status-msg muted", "{message}" }
@@ -1513,6 +1543,8 @@ mod tests {
             throughput_bytes_per_sec: None,
             started_at: None,
             created_at: None,
+            data_plane: None,
+            assigned_node: None,
         }
     }
 

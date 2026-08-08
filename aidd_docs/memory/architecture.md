@@ -29,7 +29,7 @@ flowchart LR
   KUST --> AGENT
 ```
 
-Production bulk I/O is intended to run on the **node-agent** (and CSI snapshot path), not through kube-exec into the controller. See [ADR 0001](../adr/0001-production-data-plane.md). Today’s MVP still uses mount-Pod + exec as the implemented path / fallback.
+Production bulk I/O for S3-compatible repositories runs on the **node-agent** DaemonSet + mover Pods when a Ready agent sits on the PVC’s node; otherwise mount-Pod + kube-exec remains the fallback (and is forced for Local emptyDir repos). See [ADR 0001](../adr/0001-production-data-plane.md). Status records `dataPlane` / `assignedNode`.
 
 ## Key decisions
 
@@ -38,8 +38,8 @@ Production bulk I/O is intended to run on the **node-agent** (and CSI snapshot p
 - Product UX inspired by Kopia; runtime is Kube-native CRs + controller
 - Users install via container image and/or `kubectl apply -k`
 - MVP is single-cluster and PVC-centric
-- **Post-MVP data plane (accepted):** DaemonSet node-agent + CSI VolumeSnapshots; exec is fallback/dev — [ADR 0001](../adr/0001-production-data-plane.md) / epic #66
-- Prefer one image with controller vs agent modes over a second unrelated image
+- **Data plane (shipping):** DaemonSet `proteus-node-agent` + mover Pods for remote repos; exec fallback — [ADR 0001](../adr/0001-production-data-plane.md) / epic #66 (CSI snapshots still later)
+- Prefer one image with controller vs agent/mover modes over a second unrelated image
 - Libraries use `thiserror`; only the binary edge uses `anyhow`
 - CRD API group `proteus.io`, version `v1alpha1` until GA
 - Backup recipe vs run: `ProteusBackupPolicy` (idempotent) + `ProteusBackup` (one execution, optional `policyRef`); schedules (#16) should spawn runs from policies

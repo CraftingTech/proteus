@@ -39,6 +39,12 @@ pub struct BackupListItem {
     /// CR creation time (metadata.creationTimestamp, RFC3339).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Bulk I/O path (`exec` | `agent`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_plane: Option<String>,
+    /// Node assigned for agent-plane runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigned_node: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -90,6 +96,11 @@ fn backup_list_item(obj: &ProteusBackup) -> BackupListItem {
             .creation_timestamp
             .as_ref()
             .map(|t| t.0.to_rfc3339()),
+        data_plane: obj
+            .status
+            .as_ref()
+            .and_then(|s| s.data_plane.as_ref().and_then(phase_label)),
+        assigned_node: obj.status.as_ref().and_then(|s| s.assigned_node.clone()),
     }
 }
 

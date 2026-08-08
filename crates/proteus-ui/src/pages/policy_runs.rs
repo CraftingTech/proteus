@@ -204,6 +204,14 @@ pub fn PolicyRuns(namespace: String, name: String) -> Element {
                                         Some("Running") | Some("Pending")
                                     );
                                     let message = item.message.clone().unwrap_or_default();
+                                    let plane = item.data_plane.clone().unwrap_or_default();
+                                    let plane_title = match item.assigned_node.as_deref() {
+                                        Some(node) if !plane.is_empty() => {
+                                            format!("dataPlane={plane} node={node}")
+                                        }
+                                        _ if !plane.is_empty() => format!("dataPlane={plane}"),
+                                        _ => String::new(),
+                                    };
                                     let snap_full =
                                         item.last_snapshot_id.clone().unwrap_or_default();
                                     let snap_short = if snap_full.is_empty() {
@@ -240,6 +248,13 @@ pub fn PolicyRuns(namespace: String, name: String) -> Element {
                                                         _ => "badge",
                                                     },
                                                     "{item.phase.clone().unwrap_or_else(|| \"—\".into())}"
+                                                }
+                                                if !plane.is_empty() {
+                                                    span {
+                                                        class: "pill",
+                                                        title: "{plane_title}",
+                                                        "{plane}"
+                                                    }
                                                 }
                                                 if show_progress {
                                                     div { class: "progress",
@@ -428,6 +443,8 @@ mod tests {
             throughput_bytes_per_sec: None,
             started_at: Some("2026-08-04T04:50:42Z".into()),
             created_at: Some("2026-08-04T04:49:00Z".into()),
+            data_plane: None,
+            assigned_node: None,
         };
         assert_eq!(format_run_when(&item), "2026-08-04 04:50 UTC");
     }
@@ -450,6 +467,8 @@ mod tests {
             throughput_bytes_per_sec: None,
             started_at: None,
             created_at: None,
+            data_plane: None,
+            assigned_node: None,
         };
         assert_eq!(format_run_when(&item), "2026-08-03 12:00 UTC");
     }
