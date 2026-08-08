@@ -167,9 +167,12 @@ samples kubeconfig=kubeconfig:
 build-release:
     cargo build --release -p proteus-controller
 
-# Multi-stage image (Dioxus + controller)
+# Multi-stage image (Dioxus + controller). Optional PROTEUS_VERSION overrides
+# CARGO_PKG_VERSION in the binary (default 0.0.0-dev; CI sets this from git tags).
+proteus_version := env_var_or_default("PROTEUS_VERSION", "0.0.0-dev")
+
 image:
-    docker build -f deploy/Dockerfile -t {{image}} .
+    docker build -f deploy/Dockerfile --build-arg PROTEUS_VERSION={{proteus_version}} -t {{image}} .
 
 # Build image then deploy (set PROTEUS_IMAGE if you push to a registry)
 ship kubeconfig=kubeconfig: image
