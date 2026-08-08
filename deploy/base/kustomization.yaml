@@ -6,9 +6,13 @@ namespace: proteus-system
 resources:
   - ns.yaml
   - sa.yaml
+  - sa-agent.yaml
   - clusterrole.yaml
+  - clusterrole-agent.yaml
   - clusterrolebinding.yaml
+  - clusterrolebinding-agent.yaml
   - deploy.yaml
+  - daemonset.yaml
   - svc.yaml
   - ../crds
 

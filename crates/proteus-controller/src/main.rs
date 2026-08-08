@@ -1,3 +1,4 @@
+mod agent;
 mod backup;
 mod controllers;
 mod error;
@@ -17,6 +18,20 @@ use crate::controllers::ControllerSet;
 async fn main() -> Result<()> {
     init_tracing()?;
 
+    let mode = std::env::args().nth(1);
+    match mode.as_deref() {
+        Some("agent") => crate::agent::run().await,
+        Some("mover") => {
+            anyhow::bail!("mover subcommand is not implemented yet (phase 3/4 of node-agent)")
+        }
+        Some(other) => {
+            anyhow::bail!("unknown mode {other:?}; expected `agent`, `mover`, or no argument")
+        }
+        None => run_controller().await,
+    }
+}
+
+async fn run_controller() -> Result<()> {
     let client = kube::Client::try_default()
         .await
         .context("failed to build Kubernetes client (check KUBECONFIG / ~/.kube/config)")?;
