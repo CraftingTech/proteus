@@ -71,13 +71,18 @@ jobs:
 
   # Sticky conversation comment so CI result is visible in the PR timeline
   # (Actions check runs alone are easy to miss without required status checks).
+  # Skip forks: pull_request GITHUB_TOKEN is read-only there → 403 on createComment.
   notify:
     name: PR status comment
-    if: always() && github.event_name == 'pull_request'
+    if: >
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     needs: [check, kustomize]
     runs-on: ubuntu-latest
     steps:
       - name: Post or update CI comment
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
