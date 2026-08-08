@@ -50,28 +50,8 @@ pub async fn reconcile_restore(
         return Ok(Action::requeue(Duration::from_secs(5)));
     }
 
-    let (repo_kind, pvc_namespace, pvc_names) =
-        match restore_plane_inputs(&ctx, &obj, &ns).await {
-            Ok(inputs) => inputs,
-            Err(message) => {
-                let status = terminal_status(&obj, Err(message), None, None);
-                if status_changed(obj.status.as_ref(), &status) {
-                    patch_status(&api, &name, &status).await?;
-                }
-                refresh_counts(&ctx).await;
-                return Ok(Action::requeue(Duration::from_secs(3600)));
-            }
-        };
-
-    let plane = match crate::data_plane::select_plane(
-        &ctx.client,
-        repo_kind,
-        &pvc_namespace,
-        &pvc_names,
-    )
-    .await
-    {
-        Ok(choice) => choice,
+    let (repo_kind, pvc_namespace, pvc_names) = match restore_plane_inputs(&ctx, &obj, &ns).await {
+        Ok(inputs) => inputs,
         Err(message) => {
             let status = terminal_status(&obj, Err(message), None, None);
             if status_changed(obj.status.as_ref(), &status) {
@@ -81,6 +61,21 @@ pub async fn reconcile_restore(
             return Ok(Action::requeue(Duration::from_secs(3600)));
         }
     };
+
+    let plane =
+        match crate::data_plane::select_plane(&ctx.client, repo_kind, &pvc_namespace, &pvc_names)
+            .await
+        {
+            Ok(choice) => choice,
+            Err(message) => {
+                let status = terminal_status(&obj, Err(message), None, None);
+                if status_changed(obj.status.as_ref(), &status) {
+                    patch_status(&api, &name, &status).await?;
+                }
+                refresh_counts(&ctx).await;
+                return Ok(Action::requeue(Duration::from_secs(3600)));
+            }
+        };
 
     if let Some(node) = plane.assigned_node() {
         if let Err(err) = crate::agent::ensure_mover_identity(&ctx.client, &pvc_namespace).await {
@@ -147,7 +142,8 @@ async fn restore_plane_inputs(
     let backup_namespace = backup
         .namespace()
         .unwrap_or_else(|| restore_namespace.to_string());
-    let recipe = crate::backup::recipe::load_recipe(&ctx.client, &backup, &backup_namespace).await?;
+    let recipe =
+        crate::backup::recipe::load_recipe(&ctx.client, &backup, &backup_namespace).await?;
     let kind = crate::backup::repo::repository_kind(
         &ctx.client,
         &backup_namespace,

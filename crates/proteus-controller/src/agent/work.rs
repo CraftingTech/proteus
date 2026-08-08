@@ -180,7 +180,10 @@ async fn run_restore_mover_pod(
         PURPOSE_RESTORE_MOVER,
         ns,
         &name,
-        restore.status.as_ref().and_then(|s| s.assigned_node.clone()),
+        restore
+            .status
+            .as_ref()
+            .and_then(|s| s.assigned_node.clone()),
         volumes,
         mounts,
         vec![

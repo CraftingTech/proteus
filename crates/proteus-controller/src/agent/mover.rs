@@ -250,9 +250,10 @@ async fn run_restore_mover(namespace: &str, name: &str) -> Result<()> {
             .spawn()
             .context("spawn tar extract")?;
         let stdin = child.stdin.take().context("tar stdin")?;
-        let written = materialize_volume_to_writer(opened.store.as_ref(), decrypt_key, volume, stdin)
-            .await
-            .map_err(|err| anyhow::anyhow!("materialize {}: {err}", volume.pvc_name))?;
+        let written =
+            materialize_volume_to_writer(opened.store.as_ref(), decrypt_key, volume, stdin)
+                .await
+                .map_err(|err| anyhow::anyhow!("materialize {}: {err}", volume.pvc_name))?;
         total_bytes += written;
 
         let status = child.wait().await.context("wait tar extract")?;
@@ -285,7 +286,10 @@ async fn run_restore_mover(namespace: &str, name: &str) -> Result<()> {
         duration_seconds,
         throughput_bytes_per_sec: throughput,
         data_plane: Some(DataPlane::Agent),
-        assigned_node: restore.status.as_ref().and_then(|s| s.assigned_node.clone()),
+        assigned_node: restore
+            .status
+            .as_ref()
+            .and_then(|s| s.assigned_node.clone()),
     };
     let patch = serde_json::json!({ "status": status });
     api.patch_status(name, &PatchParams::default(), &Patch::Merge(&patch))

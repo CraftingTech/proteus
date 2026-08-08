@@ -35,7 +35,8 @@ pub async fn run() -> Result<()> {
     }
 
     let pod_name = std::env::var(POD_NAME_ENV).unwrap_or_default();
-    let pod_namespace = std::env::var(POD_NAMESPACE_ENV).unwrap_or_else(|_| "proteus-system".into());
+    let pod_namespace =
+        std::env::var(POD_NAMESPACE_ENV).unwrap_or_else(|_| "proteus-system".into());
 
     let client = Client::try_default()
         .await
@@ -110,7 +111,10 @@ async fn mark_agent_ready(client: &Client, namespace: &str, name: &str) -> Resul
     api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
         .await
         .with_context(|| format!("patch Pod {namespace}/{name} Ready label"))?;
-    let pod = api.get(name).await.context("get agent Pod after Ready patch")?;
+    let pod = api
+        .get(name)
+        .await
+        .context("get agent Pod after Ready patch")?;
     info!(
         pod = %pod.name_any(),
         node = ?pod.spec.as_ref().and_then(|s| s.node_name.as_deref()),
