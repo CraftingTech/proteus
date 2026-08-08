@@ -84,6 +84,14 @@ pub async fn run_restore(
 
 /// Load the source `ProteusBackup` (defaulting to the restore's own namespace) and require it be
 /// `Succeeded` — restoring from a backup that never finished would restore garbage or nothing.
+pub async fn resolve_backup_for_plane(
+    ctx: &ReconcileCtx,
+    restore: &ProteusRestore,
+    restore_namespace: &str,
+) -> Result<ProteusBackup, String> {
+    resolve_backup(ctx, restore, restore_namespace).await
+}
+
 async fn resolve_backup(
     ctx: &ReconcileCtx,
     restore: &ProteusRestore,

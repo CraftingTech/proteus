@@ -43,6 +43,24 @@ pub struct ProteusRestoreStatus {
     pub progress_percent: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
+    /// When the current/last run started (RFC3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// Bytes written across restored volumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_bytes: Option<u64>,
+    /// Wall-clock duration of a successful run, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<u64>,
+    /// Approximate throughput (`lastBytes / durationSeconds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throughput_bytes_per_sec: Option<u64>,
+    /// Bulk I/O path used for this run (`exec` | `agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_plane: Option<crate::DataPlane>,
+    /// Node that should run (or ran) an agent-plane restore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_node: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]

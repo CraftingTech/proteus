@@ -6,6 +6,7 @@
 
 mod backup;
 mod backup_policy;
+mod data_plane;
 mod repository;
 mod restore;
 
@@ -15,6 +16,7 @@ pub use backup::{
 pub use backup_policy::{
     BackupPolicyPhase, ProteusBackupPolicy, ProteusBackupPolicySpec, ProteusBackupPolicyStatus,
 };
+pub use data_plane::DataPlane;
 pub use repository::{
     LocalBackendSpec, ProteusRepository, ProteusRepositorySpec, ProteusRepositoryStatus,
     RepositoryBackend, RepositoryPhase, S3BackendSpec,

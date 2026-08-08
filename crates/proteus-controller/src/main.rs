@@ -1,6 +1,7 @@
 mod agent;
 mod backup;
 mod controllers;
+mod data_plane;
 mod error;
 mod restore;
 

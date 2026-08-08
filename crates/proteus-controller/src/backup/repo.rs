@@ -69,6 +69,25 @@ pub async fn open_repository(
     })
 }
 
+/// Classify whether a repository is agent-reachable (`Remote`) or controller-local only.
+pub async fn repository_kind(
+    client: &Client,
+    default_namespace: &str,
+    repo_ref: &str,
+    repo_namespace: Option<&str>,
+) -> Result<crate::data_plane::RepositoryKind, String> {
+    let ns = repo_namespace.unwrap_or(default_namespace);
+    let api: Api<ProteusRepository> = Api::namespaced(client.clone(), ns);
+    let repo = api
+        .get(repo_ref)
+        .await
+        .map_err(|err| format!("repository '{repo_ref}' not found in namespace '{ns}': {err}"))?;
+    Ok(match repo.spec.backend {
+        RepositoryBackend::Local(_) => crate::data_plane::RepositoryKind::Local,
+        RepositoryBackend::S3(_) => crate::data_plane::RepositoryKind::Remote,
+    })
+}
+
 async fn load_encryption_key(
     client: &Client,
     namespace: &str,
