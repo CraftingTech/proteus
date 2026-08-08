@@ -1,7 +1,7 @@
 //! Node-agent process mode (`proteus-controller agent`).
-//!
-//! Phase 1: connect, resolve `NODE_NAME`, mark Ready, heartbeat.
-//! Later phases watch assigned Backup/Restore CRs and spawn movers.
+
+mod mover;
+mod work;
 
 use std::time::Duration;
 
@@ -24,6 +24,8 @@ pub const POD_NAME_ENV: &str = "POD_NAME";
 /// Env var for this Pod's namespace (downward API).
 pub const POD_NAMESPACE_ENV: &str = "POD_NAMESPACE";
 
+pub use mover::run as run_mover;
+
 pub async fn run() -> Result<()> {
     let node_name = std::env::var(NODE_NAME_ENV).unwrap_or_default();
     if node_name.is_empty() {
@@ -37,11 +39,20 @@ pub async fn run() -> Result<()> {
         .await
         .context("failed to build Kubernetes client for agent")?;
 
+    // Movers reuse this process image; prefer explicit env, else own Pod container image.
+    if std::env::var("PROTEUS_IMAGE").is_err() && !pod_name.is_empty() {
+        if let Ok(image) = own_container_image(&client, &pod_namespace, &pod_name).await {
+            // SAFETY: single-threaded init before work loop; process-scoped config.
+            std::env::set_var("PROTEUS_IMAGE", image);
+        }
+    }
+
     info!(
         version = env!("CARGO_PKG_VERSION"),
         %node_name,
         %pod_namespace,
         pod = %pod_name,
+        image = %std::env::var("PROTEUS_IMAGE").unwrap_or_default(),
         "starting proteus-node-agent"
     );
 
@@ -53,15 +64,27 @@ pub async fn run() -> Result<()> {
         warn!("{POD_NAME_ENV} unset; Ready label not applied");
     }
 
-    let mut ticker = tokio::time::interval(Duration::from_secs(30));
-    loop {
-        ticker.tick().await;
-        if pod_name.is_empty() {
-            continue;
+    let heartbeat = {
+        let client = client.clone();
+        let pod_namespace = pod_namespace.clone();
+        let pod_name = pod_name.clone();
+        async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                if pod_name.is_empty() {
+                    continue;
+                }
+                if let Err(err) = mark_agent_ready(&client, &pod_namespace, &pod_name).await {
+                    warn!(error = %err, "agent Ready heartbeat failed");
+                }
+            }
         }
-        if let Err(err) = mark_agent_ready(&client, &pod_namespace, &pod_name).await {
-            warn!(error = %err, "agent Ready heartbeat failed");
-        }
+    };
+
+    tokio::select! {
+        result = work::run_work_loop(client, node_name) => result,
+        () = heartbeat => bail!("agent heartbeat terminated"),
     }
 }
 
@@ -84,4 +107,17 @@ async fn mark_agent_ready(client: &Client, namespace: &str, name: &str) -> Resul
         "agent Ready"
     );
     Ok(())
+}
+
+async fn own_container_image(client: &Client, namespace: &str, name: &str) -> Result<String> {
+    let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
+    let pod = api.get(name).await.context("get own agent Pod")?;
+    let image = pod
+        .spec
+        .as_ref()
+        .and_then(|s| s.containers.first())
+        .and_then(|c| c.image.clone())
+        .filter(|s| !s.is_empty())
+        .context("agent Pod has no container image")?;
+    Ok(image)
 }

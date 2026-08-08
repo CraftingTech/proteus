@@ -23,7 +23,8 @@ async fn main() -> Result<()> {
     match mode.as_deref() {
         Some("agent") => crate::agent::run().await,
         Some("mover") => {
-            anyhow::bail!("mover subcommand is not implemented yet (phase 3/4 of node-agent)")
+            let rest: Vec<String> = std::env::args().skip(2).collect();
+            crate::agent::run_mover(&rest).await
         }
         Some(other) => {
             anyhow::bail!("unknown mode {other:?}; expected `agent`, `mover`, or no argument")
