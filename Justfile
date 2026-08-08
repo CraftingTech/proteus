@@ -46,7 +46,9 @@ check: fmt-check clippy test build-ui
 build-ui:
     #!/usr/bin/env bash
     set -euo pipefail
-    dx build -p proteus-ui --platform web --release
+    # Dioxus installs its own workspace wrapper, so an outer compiler wrapper
+    # must be cleared for this command only.
+    RUSTC_WRAPPER= dx build -p proteus-ui --platform web --release
     mkdir -p crates/proteus-ui/dist
     rm -rf crates/proteus-ui/dist/*
     src="${CARGO_TARGET_DIR:-target}/dx/proteus-ui/release/web/public"
