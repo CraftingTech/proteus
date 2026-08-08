@@ -24,7 +24,7 @@ Published by CI (`.github/workflows/image.yml`) to **`ghcr.io/craftingtech/prote
 | Trigger | Example image tags |
 | ------- | ------------------ |
 | Push `main` | `main`, `sha-<short>` |
-| Push tag `v0.0.1-alpha.1` | `0.0.1-alpha.1`, `0.0`, `sha-<short>` |
+| Push tag `v0.0.1-alpha.2` | `0.0.1-alpha.2`, `0.0`, `sha-<short>` |
 
 Semver tags omit the leading `v` (docker/metadata-action `pattern={{version}}`). The default
 overlay pins that semver string in `images[].newTag`.
@@ -79,14 +79,14 @@ kubectl apply -k deploy/overlays/default
 Remote apply against a published git tag (same manifests + pin):
 
 ```bash
-kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.0.1-alpha.1'
+kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.0.1-alpha.2'
 ```
 
 `deploy/` (product root) also builds without the overlay pin — prefer `overlays/default` so the
 image tag is explicit.
 
 Pin / bump the tag in [`overlays/default/kustomization.yaml`](overlays/default/kustomization.yaml)
-`images[].newTag` (e.g. `"0.0.1-alpha.1"` for git tag `v0.0.1-alpha.1`). Keep it aligned with
+`images[].newTag` (e.g. `"0.0.1-alpha.2"` for git tag `v0.0.1-alpha.2`). Keep it aligned with
 `[workspace.package].version` in the root `Cargo.toml` when cutting a release.
 
 Local-repo data uses `emptyDir` at `/var/lib/proteus`; replace with a PVC for persistence.
@@ -99,10 +99,10 @@ Repo prep (safe to land in a PR) is separate from publishing. After merge of rel
 
 1. Confirm `deploy/overlays/default` `images[].newTag` matches the intended semver (no `v` prefix).
 2. Make the GHCR package `proteus-controller` **Public** (GitHub → Packages → package settings).
-3. Push the annotated/lightweight tag from `main` after merge, e.g. `git tag v0.0.1-alpha.1 && git push origin v0.0.1-alpha.1`
+3. Push the annotated/lightweight tag from `main` after merge, e.g. `git tag v0.0.1-alpha.2 && git push origin v0.0.1-alpha.2`
    — do **not** invent the tag in a prep PR.
 4. CI: `image.yml` publishes multi-arch tags; `release.yml` opens the GitHub Release with install notes (prerelease when the tag contains `alpha` / `rc` / `beta`).
-5. Verify: `docker pull ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.1` (anonymous once Public) and
+5. Verify: `docker pull ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.2` (anonymous once Public) and
    `kubectl apply -k deploy/overlays/default` on a test cluster.
 
 Port-forward the UI:
@@ -138,7 +138,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/CraftingTech/proteus.git
-    targetRevision: v0.0.1-alpha.1   # pin a release tag (pre-release until GA)
+    targetRevision: v0.0.1-alpha.2   # pin a release tag (pre-release until GA)
     path: deploy/overlays/default
   destination:
     server: https://kubernetes.default.svc

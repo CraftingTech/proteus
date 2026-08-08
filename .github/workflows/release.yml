@@ -31,7 +31,7 @@ jobs:
             kubectl apply -k https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=${{ github.ref_name }}
             ```
 
-            Image: `ghcr.io/craftingtech/proteus-controller` — tags include `${{ github.ref_name }}` stripped of the leading `v` (e.g. tag `v0.0.1-alpha.1` → image `…:0.0.1-alpha.1`), plus `{{major}}.{{minor}}` from CI.
+            Image: `ghcr.io/craftingtech/proteus-controller` — tags include `${{ github.ref_name }}` stripped of the leading `v` (e.g. tag `v0.0.1-alpha.2` → image `…:0.0.1-alpha.2`), plus `{{major}}.{{minor}}` from CI.
 
             Local clone equivalent:
 
@@ -45,14 +45,15 @@ jobs:
             ### MVP capabilities
 
             - Embedded Dioxus WASM control plane served by the operator
-            - CRDs: `ProteusRepository`, `ProteusBackup`, `ProteusRestore` (`proteus.io/v1alpha1`)
+            - CRDs: `ProteusRepository`, `ProteusBackupPolicy`, `ProteusBackup`, `ProteusRestore` (`proteus.io/v1alpha1`)
             - Manual PVC backup / restore against local or S3-compatible repositories
+            - Scheduled backups on `ProteusBackupPolicy` (UTC cron, pause/resume, keepLast prune)
             - CAS storage (chunking, BLAKE3, optional AES-256-GCM at rest)
             - Single-cluster operation
 
             ### Known limits
 
-            - No scheduled / cron backup policies
+            - Retention is keepLast only (no TTL yet); large PVCs still use mount-Pod + kube-exec
             - No multi-cluster or cross-cluster migration
             - Restore requires pre-existing target PVCs (same names); no PVC create/resize
             - GHCR package must be **Public** for anonymous cluster pulls

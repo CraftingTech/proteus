@@ -4,7 +4,7 @@ Kube-native backup and disaster recovery with an embedded operator UI — **100%
 
 Proteus runs as a Kubernetes controller, owns its content-addressable storage (chunking, BLAKE3, AES-256-GCM, compression), and exposes a **Kopia-inspired UI** (Dioxus WASM) to configure backup destinations and drive backup/restore.
 
-> **Status:** early MVP / pre-release (`v0.0.1-alpha.1` / CRDs `v1alpha1`). Usable local+S3 PVC backup/restore loop; not a finished product.
+> **Status:** early MVP / pre-release (`v0.0.1-alpha.2` / CRDs `v1alpha1`). Usable local+S3 PVC backup/restore + scheduled policies; not a finished product.
 
 ## Why it exists
 
@@ -47,10 +47,10 @@ just cleanup      # remove Proteus CRDs from the cluster
 ## Install on a cluster
 
 Pinned release path (recommended): Kustomize overlay + GHCR semver image tag
-(`ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.1` for git tag `v0.0.1-alpha.1`):
+(`ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.2` for git tag `v0.0.1-alpha.2`):
 
 ```bash
-kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.0.1-alpha.1'
+kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.0.1-alpha.2'
 # or from a clone at that tag:
 kubectl apply -k deploy/overlays/default
 just pf                           # port-forward UI → :8080
