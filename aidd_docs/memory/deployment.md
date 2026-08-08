@@ -28,8 +28,9 @@ Controller Deployment is shipping today. **Node-agent DaemonSet** is the accepte
 ## Conventions
 
 - Image name default: `ghcr.io/craftingtech/proteus-controller:<tag>` (controller and future agent modes share this image)
-- Install: `kubectl apply -k deploy/overlays/default`
-- Override image tag in the overlay `images:` field
+- Tip install: `kubectl apply -k deploy/overlays/default` (pins `:main`)
+- Release install: apply overlay at git tag `vX.Y.Z`, then `kubectl set image` to `:X.Y.Z` (tag-first; no bump commits)
+- Image build ARG `PROTEUS_VERSION` bakes release semver into `CARGO_PKG_VERSION`
 - Local repo data path in-cluster: `/var/lib/proteus` (emptyDir in base; replace with PVC for persistence)
 - GitOps: consumers may Argo-source this repo (`path: deploy/overlays/default`) or vendor `deploy/` into their own GitOps repo; Ingress is a consumer overlay
 - Large-PVC throughput: deploy agent (and CSI when testing snapshots); `just run` alone stays exec/fallback

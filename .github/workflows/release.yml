@@ -14,6 +14,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve image tag
+        id: ver
+        run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -22,22 +26,30 @@ jobs:
           body: |
             ## Proteus ${{ github.ref_name }}
 
-            First-class install path: pin the multi-arch image from GHCR and apply the Kustomize overlay.
+            Tag-first release: push an annotated `v*` tag from `main` — no version-bump commit.
+            CI publishes the multi-arch GHCR image and this GitHub Release.
 
             ### Install (Kustomize + GHCR)
 
+            Overlay on the tag still pins `:main` for tip-of-tree; override the Deployment image to this release:
+
             ```bash
-            # Recommended: overlay already pins images[].newTag to this release's semver (no leading v)
-            kubectl apply -k https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=${{ github.ref_name }}
+            TAG=${{ steps.ver.outputs.tag }}
+            kubectl apply -k "https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v${TAG}"
+            kubectl -n proteus-system set image deploy/proteus-controller \
+              controller=ghcr.io/craftingtech/proteus-controller:${TAG}
             ```
 
-            Image: `ghcr.io/craftingtech/proteus-controller` — tags include `${{ github.ref_name }}` stripped of the leading `v` (e.g. tag `v0.0.1-alpha.1` → image `…:0.0.1-alpha.1`), plus `{{major}}.{{minor}}` from CI.
+            Image: `ghcr.io/craftingtech/proteus-controller:${{ steps.ver.outputs.tag }}` (plus `{{major}}.{{minor}}` / `sha-*` from CI).
 
             Local clone equivalent:
 
             ```bash
-            git checkout ${{ github.ref_name }}
+            TAG=${{ steps.ver.outputs.tag }}
+            git checkout "v${TAG}"
             kubectl apply -k deploy/overlays/default
+            kubectl -n proteus-system set image deploy/proteus-controller \
+              controller=ghcr.io/craftingtech/proteus-controller:${TAG}
             ```
 
             Details: [`deploy/README.md`](https://github.com/CraftingTech/proteus/blob/${{ github.ref_name }}/deploy/README.md).
@@ -45,14 +57,15 @@ jobs:
             ### MVP capabilities
 
             - Embedded Dioxus WASM control plane served by the operator
-            - CRDs: `ProteusRepository`, `ProteusBackup`, `ProteusRestore` (`proteus.io/v1alpha1`)
+            - CRDs: `ProteusRepository`, `ProteusBackupPolicy`, `ProteusBackup`, `ProteusRestore` (`proteus.io/v1alpha1`)
             - Manual PVC backup / restore against local or S3-compatible repositories
+            - Scheduled backups on `ProteusBackupPolicy` (UTC cron, pause/resume, keepLast prune)
             - CAS storage (chunking, BLAKE3, optional AES-256-GCM at rest)
             - Single-cluster operation
 
             ### Known limits
 
-            - No scheduled / cron backup policies
+            - Retention is keepLast only (no TTL yet); large PVCs still use mount-Pod + kube-exec
             - No multi-cluster or cross-cluster migration
             - Restore requires pre-existing target PVCs (same names); no PVC create/resize
             - GHCR package must be **Public** for anonymous cluster pulls

@@ -48,6 +48,17 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # Bake into CARGO_PKG_VERSION via Dockerfile ARG. Tag push → semver without v;
+      # branch/sha builds keep the repo placeholder 0.0.0-dev (no version bump commits).
+      - name: Resolve PROTEUS_VERSION
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "proteus_version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "proteus_version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Docker Buildx
         if: env.BORINGCACHE_ENABLED != 'true'
         uses: docker/setup-buildx-action@v3
@@ -83,6 +94,8 @@ jobs:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PROTEUS_VERSION=${{ steps.ver.outputs.proteus_version }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           docker-tool-cache: sccache:proteus-rust-main-image
           docker-mount-cache: true
@@ -101,6 +114,8 @@ jobs:
           file: deploy/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PROTEUS_VERSION=${{ steps.ver.outputs.proteus_version }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=min,scope=build-${{ env.PLATFORM_PAIR }}

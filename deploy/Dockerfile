@@ -23,8 +23,13 @@ RUN set -eux; \
     rm -rf "/tmp/${sccache_archive}" "/tmp/sccache-v${SCCACHE_VERSION}-${sccache_target}"; \
     sccache --version
 
+# Product version for env!("CARGO_PKG_VERSION"). Repo Cargo.toml stays 0.0.0-dev;
+# CI passes the git tag (no leading v) on release builds. Not a git-bump source of truth.
+ARG PROTEUS_VERSION=0.0.0-dev
+
 # --- UI (Dioxus WASM) ---------------------------------------------------
 FROM rust-cache AS ui
+ARG PROTEUS_VERSION=0.0.0-dev
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config binaryen \
     && rm -rf /var/lib/apt/lists/* \
@@ -34,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config bina
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+RUN sed -i "s/^version = \"0.0.0-dev\"/version = \"${PROTEUS_VERSION}\"/" Cargo.toml
 ARG BUILDARCH
 # Dioxus supplies its own workspace wrapper, so only this command clears the
 # BoringCache-injected compiler wrapper. The target mount preserves its output.
@@ -44,6 +50,7 @@ RUN --mount=type=cache,target=/src/target,id=proteus-target-ui-${BUILDARCH},shar
 
 # --- Controller ---------------------------------------------------------
 FROM rust-cache AS builder
+ARG PROTEUS_VERSION=0.0.0-dev
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -51,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libs
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY --from=ui /src/crates/proteus-ui/dist ./crates/proteus-ui/dist
+RUN sed -i "s/^version = \"0.0.0-dev\"/version = \"${PROTEUS_VERSION}\"/" Cargo.toml
 
 ARG TARGETARCH
 RUN --mount=type=cache,target=/src/target,id=proteus-target-controller-${TARGETARCH},sharing=locked \

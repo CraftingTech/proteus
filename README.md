@@ -4,7 +4,7 @@ Kube-native backup and disaster recovery with an embedded operator UI — **100%
 
 Proteus runs as a Kubernetes controller, owns its content-addressable storage (chunking, BLAKE3, AES-256-GCM, compression), and exposes a **Kopia-inspired UI** (Dioxus WASM) to configure backup destinations and drive backup/restore.
 
-> **Status:** early MVP / pre-release (`v0.0.1-alpha.1` / CRDs `v1alpha1`). Usable local+S3 PVC backup/restore loop; not a finished product.
+> **Status:** early MVP / pre-release (CRDs `v1alpha1`; product version = git tag, e.g. `v0.0.1-alpha.2`). Usable local+S3 PVC backup/restore + scheduled policies; not a finished product.
 
 ## Why it exists
 
@@ -46,24 +46,25 @@ just cleanup      # remove Proteus CRDs from the cluster
 
 ## Install on a cluster
 
-Pinned release path (recommended): Kustomize overlay + GHCR semver image tag
-(`ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.1` for git tag `v0.0.1-alpha.1`):
+Release path (tag-first): apply the Kustomize overlay at a git tag, then pin the GHCR
+image to the same semver (no leading `v`):
 
 ```bash
-kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.0.1-alpha.1'
-# or from a clone at that tag:
-kubectl apply -k deploy/overlays/default
+TAG=0.0.1-alpha.2
+kubectl apply -k "https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v${TAG}"
+kubectl -n proteus-system set image deploy/proteus-controller \
+  controller=ghcr.io/craftingtech/proteus-controller:${TAG}
 just pf                           # port-forward UI → :8080
 ```
 
-Local image instead of GHCR:
+Tip-of-tree / local image:
 
 ```bash
 just image                        # docker build → proteus-controller:local
-just deploy                       # kubectl apply -k deploy/overlays/default
+just deploy                       # kubectl apply -k deploy/overlays/default (pins :main)
 ```
 
-Details and release checklist: [`deploy/README.md`](deploy/README.md). After changing CRD types: `just crds`.
+Details and release process: [`deploy/README.md`](deploy/README.md). After changing CRD types: `just crds`.
 
 ## Contributing
 

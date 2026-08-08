@@ -12,7 +12,7 @@ deploy/
 ├── base/                    # namespace, RBAC, Deployment, Service, CRDs
 ├── crds/                    # generated CRD YAML
 ├── overlays/
-│   └── default/             # pinned image tag (recommended install path)
+│   └── default/             # pins GHCR :main (tip); release install overrides image
 └── examples/
 ```
 
@@ -24,10 +24,12 @@ Published by CI (`.github/workflows/image.yml`) to **`ghcr.io/craftingtech/prote
 | Trigger | Example image tags |
 | ------- | ------------------ |
 | Push `main` | `main`, `sha-<short>` |
-| Push tag `v0.0.1-alpha.1` | `0.0.1-alpha.1`, `0.0`, `sha-<short>` |
+| Push tag `v0.0.1-alpha.2` | `0.0.1-alpha.2`, `0.0`, `sha-<short>` |
 
 Semver tags omit the leading `v` (docker/metadata-action `pattern={{version}}`). The default
-overlay pins that semver string in `images[].newTag`.
+overlay pins **`main`** for tip-of-tree; release installs override the Deployment image to the
+semver tag (see below). Image builds also receive `PROTEUS_VERSION` (tag without `v`, else
+`0.0.0-dev`) so the binary's `CARGO_PKG_VERSION` matches the release without a git bump.
 
 CI builds each architecture on a **native** GitHub-hosted runner (`ubuntu-latest` /
 `ubuntu-24.04-arm`), then merges digests into one multi-arch manifest. That avoids
@@ -64,30 +66,40 @@ The image builds the Dioxus WASM UI (`dx`) then the Rust controller, and embeds 
 
 Backups stream PVC data via a short-lived mount Pod + kube exec `tar` into the operator, which chunks and stores on the fly (no full-archive buffer). On success the Backup status records `durationSeconds` and `throughputBytesPerSec` for later measurement.
 
-## Install with Kustomize (pinned GHCR release)
+## Install with Kustomize
 
-Official path — apply the overlay that pins `ghcr.io/craftingtech/proteus-controller` to a
-released semver tag (Apache-2.0, Kustomize-only; no Helm):
+### Tip-of-tree (`main`)
+
+Overlay pins `ghcr.io/craftingtech/proteus-controller:main`:
 
 ```bash
-# From a clone checked out at the release tag (or main once the overlay matches):
 just deploy
 # or:
 kubectl apply -k deploy/overlays/default
 ```
 
-Remote apply against a published git tag (same manifests + pin):
+### Released tag
+
+Tag-first: apply manifests at the git tag, then set the Deployment image to the matching
+GHCR semver (no leading `v`). No version-bump commit in the repo.
 
 ```bash
-kubectl apply -k 'https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v0.0.1-alpha.1'
+TAG=0.0.1-alpha.2
+kubectl apply -k "https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v${TAG}"
+kubectl -n proteus-system set image deploy/proteus-controller \
+  controller=ghcr.io/craftingtech/proteus-controller:${TAG}
 ```
 
-`deploy/` (product root) also builds without the overlay pin — prefer `overlays/default` so the
-image tag is explicit.
+From a clone checked out at that tag:
 
-Pin / bump the tag in [`overlays/default/kustomization.yaml`](overlays/default/kustomization.yaml)
-`images[].newTag` (e.g. `"0.0.1-alpha.1"` for git tag `v0.0.1-alpha.1`). Keep it aligned with
-`[workspace.package].version` in the root `Cargo.toml` when cutting a release.
+```bash
+TAG=0.0.1-alpha.2
+kubectl apply -k deploy/overlays/default
+kubectl -n proteus-system set image deploy/proteus-controller \
+  controller=ghcr.io/craftingtech/proteus-controller:${TAG}
+```
+
+`deploy/` (product root) also builds without the overlay pin — prefer `overlays/default`.
 
 Local-repo data uses `emptyDir` at `/var/lib/proteus`; replace with a PVC for persistence.
 
@@ -95,15 +107,12 @@ The GHCR package must be **Public** for anonymous / in-cluster pulls without a p
 
 ## Cutting a GitHub release (maintainers)
 
-Repo prep (safe to land in a PR) is separate from publishing. After merge of release-prep changes:
+No bump PR. Product version is the git tag.
 
-1. Confirm `deploy/overlays/default` `images[].newTag` matches the intended semver (no `v` prefix).
-2. Make the GHCR package `proteus-controller` **Public** (GitHub → Packages → package settings).
-3. Push the annotated/lightweight tag from `main` after merge, e.g. `git tag v0.0.1-alpha.1 && git push origin v0.0.1-alpha.1`
-   — do **not** invent the tag in a prep PR.
-4. CI: `image.yml` publishes multi-arch tags; `release.yml` opens the GitHub Release with install notes (prerelease when the tag contains `alpha` / `rc` / `beta`).
-5. Verify: `docker pull ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.1` (anonymous once Public) and
-   `kubectl apply -k deploy/overlays/default` on a test cluster.
+1. Make the GHCR package `proteus-controller` **Public** (GitHub → Packages → package settings) if not already.
+2. On up-to-date `main`: `git tag -a v0.0.1-alpha.2 -m 'Proteus v0.0.1-alpha.2' && git push origin v0.0.1-alpha.2`
+3. CI: `image.yml` publishes multi-arch tags (and bakes `PROTEUS_VERSION` into the binary); `release.yml` opens the GitHub Release with install notes (prerelease when the tag contains `alpha` / `rc` / `beta`).
+4. Verify: `docker pull ghcr.io/craftingtech/proteus-controller:0.0.1-alpha.2` (anonymous once Public) and the install snippet from the Release.
 
 Port-forward the UI:
 
@@ -138,11 +147,13 @@ spec:
   project: default
   source:
     repoURL: https://github.com/CraftingTech/proteus.git
-    targetRevision: v0.0.1-alpha.1   # pin a release tag (pre-release until GA)
+    targetRevision: v0.0.1-alpha.2   # pin a release git tag
     path: deploy/overlays/default
   destination:
     server: https://kubernetes.default.svc
     namespace: proteus-system
+  # Overlay still references :main — pin the release image in a consumer overlay or
+  # kustomize `images` patch, e.g. newTag: 0.0.1-alpha.2
   syncPolicy:
     automated:
       selfHeal: true
@@ -152,8 +163,8 @@ spec:
 
 ### B — Vendor (copy into your GitOps repo)
 
-Copy `deploy/` (or subtree) into your cluster repo, pin `images[].newTag` to a GHCR digest/tag
-you trust, then point Argo at **your** path. Same manifests; your repo owns the sync cadence.
+Copy `deploy/` (or subtree) into your cluster repo, set `images[].newTag` to a GHCR digest/tag
+you trust (release semver or digest), then point Argo at **your** path. Same manifests; your repo owns the sync cadence.
 
 Ingress (e.g. Tailscale) is intentionally **not** in this package — add it in a consumer overlay.
 

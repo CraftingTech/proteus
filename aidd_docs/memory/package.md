@@ -16,6 +16,8 @@ What this project ships as a reusable package: its public surface and release po
 
 ## Versioning
 
-- Single workspace version `0.0.1-alpha.1` for all crates (pre-release; not a product GA)
+- Product version = **git tag** `v*` (tag-first release; no bump commits/PRs)
+- Workspace `Cargo.toml` stays at stable `0.0.0-dev`; CI injects the tag into the image build via `PROTEUS_VERSION` so `CARGO_PKG_VERSION` matches the release
+- Overlay `deploy/overlays/default` pins GHCR `:main`; release install overrides the Deployment image to the semver tag
 - Semver: CRD/`v1alpha1` breaking changes allowed without major bump until GA; document CR migrations when they happen
 - Kubernetes API compatibility keyed off `k8s-openapi` feature (`v1_30` today) rather than a separate peer dep for callers

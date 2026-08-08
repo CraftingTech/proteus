@@ -2926,7 +2926,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-api"
-version = "0.0.1-alpha.1"
+version = "0.0.0-dev"
 dependencies = [
  "axum",
  "chrono",
@@ -2947,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-controller"
-version = "0.0.1-alpha.1"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -2969,7 +2969,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-core"
-version = "0.0.1-alpha.1"
+version = "0.0.0-dev"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -2993,7 +2993,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-crd"
-version = "0.0.1-alpha.1"
+version = "0.0.0-dev"
 dependencies = [
  "chrono",
  "k8s-openapi",
@@ -3006,7 +3006,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-ui"
-version = "0.0.1-alpha.1"
+version = "0.0.0-dev"
 dependencies = [
  "dioxus",
  "gloo-net",
