@@ -31,7 +31,7 @@ flowchart TD
 > CAS → local FS without apiserver bulk or full-archive Vec.
 
 1. `proteus-controller mover restore …`
-2. Stream extract to mounted PVC
+2. Stream extract to mounted PVC at `/volumes/<pvcName>`
 
 ### `2)` Agent orchestrates restore movers
 
@@ -44,5 +44,5 @@ flowchart TD
 
 | Task | Acceptance criteria |
 | ---- | ------------------- |
-| 1 | Restore mover writes snapshot data to `/data` without kube-exec |
+| 1 | Restore mover writes snapshot data to `/volumes/<pvc>` without kube-exec or full-volume buffer |
 | 2 | Cluster: Restore Succeeded with dataPlane=agent after agent Backup |

@@ -10,14 +10,13 @@ use chrono::Utc;
 use kube::api::{Patch, PatchParams};
 use kube::{Api, Client};
 use proteus_core::backup::{
-    ingest_volume_stream, load_snapshot, materialize_volume, seal_snapshot, SnapshotManifest,
-    MANIFEST_VERSION,
+    ingest_volume_stream, load_snapshot, materialize_volume_to_writer, seal_snapshot,
+    SnapshotManifest, MANIFEST_VERSION,
 };
 use proteus_crd::{
     BackupPhase, DataPlane, ProteusBackup, ProteusBackupStatus, ProteusRestore,
     ProteusRestoreStatus, RestorePhase,
 };
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::info;
 
@@ -243,11 +242,6 @@ async fn run_restore_mover(namespace: &str, name: &str) -> Result<()> {
             );
         }
 
-        let data = materialize_volume(opened.store.as_ref(), decrypt_key, volume)
-            .await
-            .map_err(|err| anyhow::anyhow!("materialize {}: {err}", volume.pvc_name))?;
-        total_bytes += data.len() as u64;
-
         let mut child = Command::new("tar")
             .args(["-xf", "-", "-C"])
             .arg(&mount)
@@ -255,10 +249,12 @@ async fn run_restore_mover(namespace: &str, name: &str) -> Result<()> {
             .stderr(Stdio::piped())
             .spawn()
             .context("spawn tar extract")?;
-        {
-            let mut stdin = child.stdin.take().context("tar stdin")?;
-            stdin.write_all(&data).await.context("write tar stdin")?;
-        }
+        let stdin = child.stdin.take().context("tar stdin")?;
+        let written = materialize_volume_to_writer(opened.store.as_ref(), decrypt_key, volume, stdin)
+            .await
+            .map_err(|err| anyhow::anyhow!("materialize {}: {err}", volume.pvc_name))?;
+        total_bytes += written;
+
         let status = child.wait().await.context("wait tar extract")?;
         if !status.success() {
             bail!("tar extract failed for PVC '{}'", volume.pvc_name);

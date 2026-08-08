@@ -1,5 +1,6 @@
 //! Node-agent process mode (`proteus-controller agent`).
 
+mod identity;
 mod mover;
 mod work;
 
@@ -24,6 +25,7 @@ pub const POD_NAME_ENV: &str = "POD_NAME";
 /// Env var for this Pod's namespace (downward API).
 pub const POD_NAMESPACE_ENV: &str = "POD_NAMESPACE";
 
+pub use identity::ensure_mover_identity;
 pub use mover::run as run_mover;
 
 pub async fn run() -> Result<()> {
@@ -39,20 +41,14 @@ pub async fn run() -> Result<()> {
         .await
         .context("failed to build Kubernetes client for agent")?;
 
-    // Movers reuse this process image; prefer explicit env, else own Pod container image.
-    if std::env::var("PROTEUS_IMAGE").is_err() && !pod_name.is_empty() {
-        if let Ok(image) = own_container_image(&client, &pod_namespace, &pod_name).await {
-            // SAFETY: single-threaded init before work loop; process-scoped config.
-            std::env::set_var("PROTEUS_IMAGE", image);
-        }
-    }
+    let mover_image = resolve_mover_image(&client, &pod_namespace, &pod_name).await;
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
         %node_name,
         %pod_namespace,
         pod = %pod_name,
-        image = %std::env::var("PROTEUS_IMAGE").unwrap_or_default(),
+        image = %mover_image,
         "starting proteus-node-agent"
     );
 
@@ -83,9 +79,23 @@ pub async fn run() -> Result<()> {
     };
 
     tokio::select! {
-        result = work::run_work_loop(client, node_name) => result,
+        result = work::run_work_loop(client, node_name, mover_image) => result,
         () = heartbeat => bail!("agent heartbeat terminated"),
     }
+}
+
+async fn resolve_mover_image(client: &Client, namespace: &str, pod_name: &str) -> String {
+    if let Ok(image) = std::env::var("PROTEUS_IMAGE") {
+        if !image.is_empty() {
+            return image;
+        }
+    }
+    if !pod_name.is_empty() {
+        if let Ok(image) = own_container_image(client, namespace, pod_name).await {
+            return image;
+        }
+    }
+    "ghcr.io/craftingtech/proteus-controller:main".into()
 }
 
 async fn mark_agent_ready(client: &Client, namespace: &str, name: &str) -> Result<()> {

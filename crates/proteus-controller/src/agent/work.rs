@@ -6,18 +6,17 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use k8s_openapi::api::core::v1::{
-    Container, EnvVar, PersistentVolumeClaimVolumeSource, Pod, PodSpec, ServiceAccount, Toleration,
-    Volume, VolumeMount,
+    Container, EnvVar, PersistentVolumeClaimVolumeSource, Pod, PodSpec, Toleration, Volume,
+    VolumeMount,
 };
-use k8s_openapi::api::rbac::v1::{ClusterRoleBinding, RoleRef, Subject};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
 use kube::{Api, Client, ResourceExt};
-use proteus_crd::{
-    BackupPhase, DataPlane, ProteusBackup, ProteusRestore, RestorePhase,
-};
+use proteus_crd::{BackupPhase, DataPlane, ProteusBackup, ProteusRestore, RestorePhase};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+
+use super::identity::MOVER_SA;
 
 const LABEL_PURPOSE: &str = "proteus.io/purpose";
 const PURPOSE_BACKUP_MOVER: &str = "backup-mover";
@@ -25,16 +24,15 @@ const PURPOSE_RESTORE_MOVER: &str = "restore-mover";
 const LABEL_OWNER: &str = "proteus.io/owner";
 const LABEL_OWNER_NS: &str = "proteus.io/owner-namespace";
 const VOLUME_ROOT: &str = "/volumes";
-const MOVER_SA: &str = "proteus-node-agent";
-const MOVER_CLUSTER_ROLE: &str = "proteus-node-agent";
 const MOVER_POD_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const POLL: Duration = Duration::from_secs(5);
 
 /// Poll assigned CRs and spawn movers until the process exits.
-pub async fn run_work_loop(client: Client, node_name: String) -> Result<()> {
+pub async fn run_work_loop(client: Client, node_name: String, mover_image: String) -> Result<()> {
     let inflight: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+    let image = Arc::new(mover_image);
     loop {
-        if let Err(err) = poll_once(&client, &node_name, &inflight).await {
+        if let Err(err) = poll_once(&client, &node_name, &inflight, &image).await {
             warn!(error = %err, "agent work poll failed");
         }
         tokio::time::sleep(POLL).await;
@@ -45,6 +43,7 @@ async fn poll_once(
     client: &Client,
     node_name: &str,
     inflight: &Arc<Mutex<HashSet<String>>>,
+    image: &Arc<String>,
 ) -> Result<()> {
     let backups: Api<ProteusBackup> = Api::all(client.clone());
     for backup in backups.list(&ListParams::default()).await?.items {
@@ -62,8 +61,9 @@ async fn poll_once(
         }
         let client = client.clone();
         let inflight = Arc::clone(inflight);
+        let image = Arc::clone(image);
         tokio::spawn(async move {
-            if let Err(err) = run_backup_mover_pod(&client, &ns, &backup).await {
+            if let Err(err) = run_backup_mover_pod(&client, &ns, &backup, &image).await {
                 warn!(%ns, %name, error = %err, "backup mover failed");
                 let _ = fail_backup(&client, &ns, &name, &err.to_string()).await;
             }
@@ -87,8 +87,9 @@ async fn poll_once(
         }
         let client = client.clone();
         let inflight = Arc::clone(inflight);
+        let image = Arc::clone(image);
         tokio::spawn(async move {
-            if let Err(err) = run_restore_mover_pod(&client, &ns, &restore).await {
+            if let Err(err) = run_restore_mover_pod(&client, &ns, &restore, &image).await {
                 warn!(%ns, %name, error = %err, "restore mover failed");
                 let _ = fail_restore(&client, &ns, &name, &err.to_string()).await;
             }
@@ -118,19 +119,22 @@ fn is_assigned_restore(restore: &ProteusRestore, node_name: &str) -> bool {
         && status.completed_at.is_none()
 }
 
-async fn run_backup_mover_pod(client: &Client, ns: &str, backup: &ProteusBackup) -> Result<()> {
+async fn run_backup_mover_pod(
+    client: &Client,
+    ns: &str,
+    backup: &ProteusBackup,
+    image: &str,
+) -> Result<()> {
     let recipe = crate::backup::recipe::load_recipe(client, backup, ns)
         .await
         .map_err(anyhow::Error::msg)?;
     let name = backup.name_any();
     let pod_name = format!("proteus-bmv-{}", uuid_short());
-    let image = mover_image();
 
-    ensure_mover_identity(client, &recipe.target_namespace).await?;
     let (volumes, mounts) = pvc_mounts(&recipe.pvc_names, true);
     let pod = build_mover_pod(
         &pod_name,
-        &image,
+        image,
         &recipe.target_namespace,
         PURPOSE_BACKUP_MOVER,
         ns,
@@ -150,7 +154,12 @@ async fn run_backup_mover_pod(client: &Client, ns: &str, backup: &ProteusBackup)
     create_and_wait_mover(client, &recipe.target_namespace, pod, &pod_name).await
 }
 
-async fn run_restore_mover_pod(client: &Client, ns: &str, restore: &ProteusRestore) -> Result<()> {
+async fn run_restore_mover_pod(
+    client: &Client,
+    ns: &str,
+    restore: &ProteusRestore,
+    image: &str,
+) -> Result<()> {
     let backup_ns = restore.spec.backup_namespace.as_deref().unwrap_or(ns);
     let backups: Api<ProteusBackup> = Api::namespaced(client.clone(), backup_ns);
     let backup = backups
@@ -162,13 +171,11 @@ async fn run_restore_mover_pod(client: &Client, ns: &str, restore: &ProteusResto
         .map_err(anyhow::Error::msg)?;
     let name = restore.name_any();
     let pod_name = format!("proteus-rmv-{}", uuid_short());
-    let image = mover_image();
 
-    ensure_mover_identity(client, &restore.spec.target_namespace).await?;
     let (volumes, mounts) = pvc_mounts(&recipe.pvc_names, false);
     let pod = build_mover_pod(
         &pod_name,
-        &image,
+        image,
         &restore.spec.target_namespace,
         PURPOSE_RESTORE_MOVER,
         ns,
@@ -186,74 +193,6 @@ async fn run_restore_mover_pod(client: &Client, ns: &str, restore: &ProteusResto
         ],
     );
     create_and_wait_mover(client, &restore.spec.target_namespace, pod, &pod_name).await
-}
-
-/// Mover Pods need the node-agent ClusterRole inside the PVC namespace (SA must exist there).
-async fn ensure_mover_identity(client: &Client, namespace: &str) -> Result<()> {
-    let sa_api: Api<ServiceAccount> = Api::namespaced(client.clone(), namespace);
-    match sa_api.get(MOVER_SA).await {
-        Ok(_) => {}
-        Err(kube::Error::Api(err)) if err.code == 404 => {
-            let sa = ServiceAccount {
-                metadata: ObjectMeta {
-                    name: Some(MOVER_SA.into()),
-                    namespace: Some(namespace.into()),
-                    labels: Some(BTreeMap::from([
-                        ("app.kubernetes.io/name".into(), "proteus".into()),
-                        ("app.kubernetes.io/component".into(), "mover".into()),
-                    ])),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            sa_api
-                .create(&PostParams::default(), &sa)
-                .await
-                .with_context(|| format!("create ServiceAccount {namespace}/{MOVER_SA}"))?;
-            info!(%namespace, "created mover ServiceAccount");
-        }
-        Err(err) => {
-            return Err(err).with_context(|| format!("get ServiceAccount {namespace}/{MOVER_SA}"));
-        }
-    }
-
-    let crb_name = format!("proteus-node-agent-{namespace}");
-    let crb_api: Api<ClusterRoleBinding> = Api::all(client.clone());
-    match crb_api.get(&crb_name).await {
-        Ok(_) => {}
-        Err(kube::Error::Api(err)) if err.code == 404 => {
-            let crb = ClusterRoleBinding {
-                metadata: ObjectMeta {
-                    name: Some(crb_name.clone()),
-                    labels: Some(BTreeMap::from([
-                        ("app.kubernetes.io/name".into(), "proteus".into()),
-                        ("app.kubernetes.io/component".into(), "mover".into()),
-                    ])),
-                    ..Default::default()
-                },
-                role_ref: RoleRef {
-                    api_group: "rbac.authorization.k8s.io".into(),
-                    kind: "ClusterRole".into(),
-                    name: MOVER_CLUSTER_ROLE.into(),
-                },
-                subjects: Some(vec![Subject {
-                    kind: "ServiceAccount".into(),
-                    name: MOVER_SA.into(),
-                    namespace: Some(namespace.into()),
-                    ..Default::default()
-                }]),
-            };
-            crb_api
-                .create(&PostParams::default(), &crb)
-                .await
-                .with_context(|| format!("create ClusterRoleBinding {crb_name}"))?;
-            info!(%crb_name, "created mover ClusterRoleBinding");
-        }
-        Err(err) => {
-            return Err(err).with_context(|| format!("get ClusterRoleBinding {crb_name}"));
-        }
-    }
-    Ok(())
 }
 
 fn pvc_mounts(pvc_names: &[String], read_only: bool) -> (Vec<Volume>, Vec<VolumeMount>) {
@@ -277,11 +216,6 @@ fn pvc_mounts(pvc_names: &[String], read_only: bool) -> (Vec<Volume>, Vec<Volume
         });
     }
     (volumes, mounts)
-}
-
-fn mover_image() -> String {
-    std::env::var("PROTEUS_IMAGE")
-        .unwrap_or_else(|_| "ghcr.io/craftingtech/proteus-controller:main".into())
 }
 
 #[allow(clippy::too_many_arguments)]

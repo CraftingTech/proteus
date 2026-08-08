@@ -83,6 +83,19 @@ pub async fn reconcile_restore(
     };
 
     if let Some(node) = plane.assigned_node() {
+        if let Err(err) = crate::agent::ensure_mover_identity(&ctx.client, &pvc_namespace).await {
+            let status = terminal_status(
+                &obj,
+                Err(format!("failed to provision mover identity: {err}")),
+                None,
+                None,
+            );
+            if status_changed(obj.status.as_ref(), &status) {
+                patch_status(&api, &name, &status).await?;
+            }
+            refresh_counts(&ctx).await;
+            return Ok(Action::requeue(Duration::from_secs(30)));
+        }
         let mut running = running_status(&obj);
         running.data_plane = Some(plane.data_plane());
         running.assigned_node = Some(node.to_string());

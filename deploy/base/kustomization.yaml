@@ -9,6 +9,7 @@ resources:
   - sa-agent.yaml
   - clusterrole.yaml
   - clusterrole-agent.yaml
+  - clusterrole-mover.yaml
   - clusterrolebinding.yaml
   - clusterrolebinding-agent.yaml
   - deploy.yaml
