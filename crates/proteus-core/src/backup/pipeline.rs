@@ -1,5 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::snapshot::{SnapshotManifest, VolumeSnapshot, MANIFEST_VERSION};
 use crate::chunking::{Chunker, DEFAULT_CHUNK_SIZE};
@@ -345,6 +345,23 @@ pub async fn materialize_volume(
     volume: &VolumeSnapshot,
 ) -> CoreResult<Vec<u8>> {
     let mut out = Vec::with_capacity(volume.bytes as usize);
+    materialize_volume_to_writer(store, key, volume, &mut out).await?;
+    Ok(out)
+}
+
+/// Stream decrypted volume chunks into `writer` without buffering the full archive.
+///
+/// Same key / size invariants as [`materialize_volume`].
+pub async fn materialize_volume_to_writer<W>(
+    store: &dyn ObjectStore,
+    key: Option<&EncryptionKey>,
+    volume: &VolumeSnapshot,
+    mut writer: W,
+) -> CoreResult<u64>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    let mut written = 0u64;
 
     for chunk_id_hex in &volume.chunk_ids {
         let id = ContentId::from_hex(chunk_id_hex)?;
@@ -358,19 +375,24 @@ pub async fn materialize_volume(
             )?,
             None => stored.to_vec(),
         };
-        out.extend_from_slice(&plaintext);
+        writer.write_all(&plaintext).await.map_err(|source| {
+            CoreError::InvalidArgument(format!("volume stream write failed: {source}"))
+        })?;
+        written += plaintext.len() as u64;
     }
 
-    if out.len() as u64 != volume.bytes {
+    writer.flush().await.map_err(|source| {
+        CoreError::InvalidArgument(format!("volume stream flush failed: {source}"))
+    })?;
+
+    if written != volume.bytes {
         return Err(CoreError::InvalidArgument(format!(
-            "materialized {} bytes for pvc '{}', manifest recorded {}",
-            out.len(),
-            volume.pvc_name,
-            volume.bytes
+            "materialized {written} bytes for pvc '{}', manifest recorded {}",
+            volume.pvc_name, volume.bytes
         )));
     }
 
-    Ok(out)
+    Ok(written)
 }
 
 #[cfg(test)]
@@ -859,6 +881,14 @@ mod tests {
             .expect("materialize b");
         assert_eq!(restored_a, a);
         assert_eq!(restored_b, b);
+
+        let mut streamed = Vec::new();
+        let written =
+            materialize_volume_to_writer(&store, Some(&key), &manifest.volumes[0], &mut streamed)
+                .await
+                .expect("stream materialize");
+        assert_eq!(written, a.len() as u64);
+        assert_eq!(streamed, a);
     }
 
     #[tokio::test]

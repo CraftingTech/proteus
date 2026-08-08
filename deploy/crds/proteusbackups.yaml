@@ -84,6 +84,17 @@ spec:
           status:
             nullable: true
             properties:
+              assignedNode:
+                description: Node that should run (or ran) an agent-plane backup.
+                nullable: true
+                type: string
+              dataPlane:
+                description: Bulk I/O path used for this run (`exec` | `agent`).
+                enum:
+                - exec
+                - agent
+                nullable: true
+                type: string
               durationSeconds:
                 description: Wall-clock duration of a successful run, in seconds.
                 format: uint64

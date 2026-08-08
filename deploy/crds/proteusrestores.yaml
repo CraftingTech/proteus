@@ -56,9 +56,32 @@ spec:
           status:
             nullable: true
             properties:
+              assignedNode:
+                description: Node that should run (or ran) an agent-plane restore.
+                nullable: true
+                type: string
               completedAt:
                 nullable: true
                 type: string
+              dataPlane:
+                description: Bulk I/O path used for this run (`exec` | `agent`).
+                enum:
+                - exec
+                - agent
+                nullable: true
+                type: string
+              durationSeconds:
+                description: Wall-clock duration of a successful run, in seconds.
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
+              lastBytes:
+                description: Bytes written across restored volumes.
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
               message:
                 nullable: true
                 type: string
@@ -78,6 +101,16 @@ spec:
               restoredSnapshotId:
                 nullable: true
                 type: string
+              startedAt:
+                description: When the current/last run started (RFC3339).
+                nullable: true
+                type: string
+              throughputBytesPerSec:
+                description: Approximate throughput (`lastBytes / durationSeconds`).
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
             type: object
         required:
         - spec

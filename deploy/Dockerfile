@@ -68,8 +68,11 @@ RUN --mount=type=cache,target=/src/target,id=proteus-target-controller-${TARGETA
     && test -x /src/proteus-controller
 
 # --- Runtime ------------------------------------------------------------
+# Busybox provides `tar` for node-agent mover Pods (distroless has no shell utils).
+FROM busybox:1.36 AS busybox
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /src/proteus-controller /usr/local/bin/proteus-controller
+COPY --from=busybox /bin/busybox /usr/local/bin/tar
 USER nonroot:nonroot
 EXPOSE 8080
 ENV PROTEUS_API_ADDR=0.0.0.0:8080

@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: proteus-mover
+rules:
+  # Narrow role for short-lived mover Pods (no Pod/CRB create).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["proteus.io"]
+    resources:
+      - proteusrepositories
+      - proteusbackups
+      - proteusrestores
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["proteus.io"]
+    resources:
+      - proteusbackups/status
+      - proteusrestores/status
+    verbs: ["get", "update", "patch"]

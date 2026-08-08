@@ -9,7 +9,7 @@ Kustomize-only install package (no Helm). Local recipes live in the root [`Justf
 deploy/
 ├── Dockerfile
 ├── kustomization.yaml       # product root → ./base
-├── base/                    # namespace, RBAC, Deployment, Service, CRDs
+├── base/                    # namespace, RBAC, Deployment, DaemonSet, Service, CRDs
 ├── crds/                    # generated CRD YAML
 ├── overlays/
 │   └── default/             # pins GHCR :main (tip); release install overrides image
@@ -64,7 +64,16 @@ docker build -f deploy/Dockerfile -t proteus-controller:local .
 
 The image builds the Dioxus WASM UI (`dx`) then the Rust controller, and embeds UI assets in the binary.
 
-Backups stream PVC data via a short-lived mount Pod + kube exec `tar` into the operator, which chunks and stores on the fly (no full-archive buffer). On success the Backup status records `durationSeconds` and `throughputBytesPerSec` for later measurement.
+### Data plane (backup / restore I/O)
+
+| Path | When | How |
+| ---- | ---- | --- |
+| **agent** | S3-compatible repo + Ready `proteus-node-agent` on the PVC’s node + all PVCs on one node | DaemonSet claims work; short-lived mover Pod mounts PVCs under `/volumes/<pvc>` and talks to CAS |
+| **exec** | Local emptyDir repo, no Ready agent, or multi-node PVC set | Mount Pod + kube-exec `tar` into the controller (dev / fallback) |
+
+Status fields `dataPlane` (`exec` \| `agent`) and `assignedNode` record which path ran. Same image: `proteus-controller` (default), `agent`, `mover`.
+
+Runtime image includes a Busybox `tar` applet for movers (distroless has no shell utils).
 
 ## Install with Kustomize
 
@@ -88,6 +97,8 @@ TAG=0.0.1-alpha.2
 kubectl apply -k "https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v${TAG}"
 kubectl -n proteus-system set image deploy/proteus-controller \
   controller=ghcr.io/craftingtech/proteus-controller:${TAG}
+kubectl -n proteus-system set image ds/proteus-node-agent \
+  agent=ghcr.io/craftingtech/proteus-controller:${TAG}
 ```
 
 From a clone checked out at that tag:
@@ -97,11 +108,13 @@ TAG=0.0.1-alpha.2
 kubectl apply -k deploy/overlays/default
 kubectl -n proteus-system set image deploy/proteus-controller \
   controller=ghcr.io/craftingtech/proteus-controller:${TAG}
+kubectl -n proteus-system set image ds/proteus-node-agent \
+  agent=ghcr.io/craftingtech/proteus-controller:${TAG}
 ```
 
 `deploy/` (product root) also builds without the overlay pin — prefer `overlays/default`.
 
-Local-repo data uses `emptyDir` at `/var/lib/proteus`; replace with a PVC for persistence.
+Local-repo data uses `emptyDir` at `/var/lib/proteus`; replace with a PVC for persistence. Local repos always use the **exec** data plane (agent movers cannot reach the controller emptyDir).
 
 The GHCR package must be **Public** for anonymous / in-cluster pulls without a pull secret.
 

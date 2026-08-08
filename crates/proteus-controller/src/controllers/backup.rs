@@ -74,7 +74,98 @@ pub async fn reconcile_backup(
         active.insert(active_key.clone());
     }
 
-    let running = running_status(&obj);
+    // Already handed to an agent: wait for the agent to patch a terminal status.
+    if matches!(
+        obj.status.as_ref().and_then(|s| s.data_plane.as_ref()),
+        Some(proteus_crd::DataPlane::Agent)
+    ) && matches!(current_phase(&obj), Some(BackupPhase::Running) | None)
+    {
+        clear_active(&ctx, &active_key);
+        refresh_counts(&ctx).await;
+        return Ok(Action::requeue(Duration::from_secs(5)));
+    }
+
+    let repo_kind = match crate::backup::repo::repository_kind(
+        &ctx.client,
+        &ns,
+        &recipe.repository_ref,
+        recipe.repository_namespace.as_deref(),
+    )
+    .await
+    {
+        Ok(kind) => kind,
+        Err(message) => {
+            let status = terminal_status(&obj, Err(message), None);
+            if status_changed(obj.status.as_ref(), &status) {
+                let _ = patch_status(&api, &name, &status).await;
+            }
+            clear_active(&ctx, &active_key);
+            refresh_counts(&ctx).await;
+            return Ok(Action::requeue(Duration::from_secs(3600)));
+        }
+    };
+
+    let plane = match crate::data_plane::select_plane(
+        &ctx.client,
+        repo_kind,
+        &recipe.target_namespace,
+        &recipe.pvc_names,
+    )
+    .await
+    {
+        Ok(choice) => choice,
+        Err(message) => {
+            let status = terminal_status(&obj, Err(message), None);
+            if status_changed(obj.status.as_ref(), &status) {
+                let _ = patch_status(&api, &name, &status).await;
+            }
+            clear_active(&ctx, &active_key);
+            refresh_counts(&ctx).await;
+            return Ok(Action::requeue(Duration::from_secs(3600)));
+        }
+    };
+
+    if let Some(node) = plane.assigned_node() {
+        if let Err(err) =
+            crate::agent::ensure_mover_identity(&ctx.client, &recipe.target_namespace).await
+        {
+            let status = terminal_status(
+                &obj,
+                Err(format!("failed to provision mover identity: {err}")),
+                None,
+            );
+            if status_changed(obj.status.as_ref(), &status) {
+                let _ = patch_status(&api, &name, &status).await;
+            }
+            clear_active(&ctx, &active_key);
+            refresh_counts(&ctx).await;
+            return Ok(Action::requeue(Duration::from_secs(30)));
+        }
+        let mut running = running_status(&obj);
+        running.data_plane = Some(plane.data_plane());
+        running.assigned_node = Some(node.to_string());
+        running.message = Some(format!(
+            "assigned to proteus-node-agent on '{node}' (dataPlane=agent)"
+        ));
+        if status_changed(obj.status.as_ref(), &running) {
+            if let Err(err) = patch_status(&api, &name, &running).await {
+                clear_active(&ctx, &active_key);
+                return Err(err);
+            }
+        }
+        clear_active(&ctx, &active_key);
+        refresh_counts(&ctx).await;
+        return Ok(Action::requeue(Duration::from_secs(5)));
+    }
+
+    let running = {
+        let mut status = running_status(&obj);
+        status.data_plane = Some(plane.data_plane());
+        if let crate::data_plane::PlaneChoice::Exec { reason } = &plane {
+            status.message = Some(format!("backup starting ({reason})"));
+        }
+        status
+    };
     // Capture now: `obj` is the reconcile snapshot and will not see this patch.
     let run_started_at = running.started_at.clone();
     if status_changed(obj.status.as_ref(), &running) {
@@ -88,7 +179,8 @@ pub async fn reconcile_backup(
     let outcome = crate::backup::run_backup(&obj, &recipe, &ctx, &ns, progress).await;
     clear_active(&ctx, &active_key);
 
-    let status = terminal_status(&obj, outcome, run_started_at.as_deref());
+    let mut status = terminal_status(&obj, outcome, run_started_at.as_deref());
+    status.data_plane = Some(proteus_crd::DataPlane::Exec);
     if status_changed(obj.status.as_ref(), &status) {
         patch_status(&api, &name, &status).await?;
     }
@@ -131,6 +223,8 @@ fn carry_forward(obj: &ProteusBackup) -> ProteusBackupStatus {
         duration_seconds: obj.status.as_ref().and_then(|s| s.duration_seconds),
         throughput_bytes_per_sec: obj.status.as_ref().and_then(|s| s.throughput_bytes_per_sec),
         progress_percent: obj.status.as_ref().and_then(|s| s.progress_percent),
+        data_plane: obj.status.as_ref().and_then(|s| s.data_plane.clone()),
+        assigned_node: obj.status.as_ref().and_then(|s| s.assigned_node.clone()),
         ..Default::default()
     }
 }
@@ -236,6 +330,8 @@ fn status_changed(current: Option<&ProteusBackupStatus>, next: &ProteusBackupSta
                 || cur.last_snapshot_id != next.last_snapshot_id
                 || cur.duration_seconds != next.duration_seconds
                 || cur.throughput_bytes_per_sec != next.throughput_bytes_per_sec
+                || cur.data_plane != next.data_plane
+                || cur.assigned_node != next.assigned_node
         }
     }
 }

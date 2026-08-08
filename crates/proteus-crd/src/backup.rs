@@ -100,6 +100,12 @@ pub struct ProteusBackupStatus {
     /// Approximate throughput of a successful run (`lastBytes / durationSeconds`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throughput_bytes_per_sec: Option<u64>,
+    /// Bulk I/O path used for this run (`exec` | `agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_plane: Option<crate::DataPlane>,
+    /// Node that should run (or ran) an agent-plane backup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_node: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]

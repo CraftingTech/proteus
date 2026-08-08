@@ -31,13 +31,15 @@ jobs:
 
             ### Install (Kustomize + GHCR)
 
-            Overlay on the tag still pins `:main` for tip-of-tree; override the Deployment image to this release:
+            Overlay on the tag still pins `:main` for tip-of-tree; override Deployment **and** DaemonSet images to this release:
 
             ```bash
             TAG=${{ steps.ver.outputs.tag }}
             kubectl apply -k "https://github.com/CraftingTech/proteus.git//deploy/overlays/default?ref=v${TAG}"
             kubectl -n proteus-system set image deploy/proteus-controller \
               controller=ghcr.io/craftingtech/proteus-controller:${TAG}
+            kubectl -n proteus-system set image ds/proteus-node-agent \
+              agent=ghcr.io/craftingtech/proteus-controller:${TAG}
             ```
 
             Image: `ghcr.io/craftingtech/proteus-controller:${{ steps.ver.outputs.tag }}` (plus `{{major}}.{{minor}}` / `sha-*` from CI).
@@ -50,6 +52,8 @@ jobs:
             kubectl apply -k deploy/overlays/default
             kubectl -n proteus-system set image deploy/proteus-controller \
               controller=ghcr.io/craftingtech/proteus-controller:${TAG}
+            kubectl -n proteus-system set image ds/proteus-node-agent \
+              agent=ghcr.io/craftingtech/proteus-controller:${TAG}
             ```
 
             Details: [`deploy/README.md`](https://github.com/CraftingTech/proteus/blob/${{ github.ref_name }}/deploy/README.md).
@@ -59,13 +63,14 @@ jobs:
             - Embedded Dioxus WASM control plane served by the operator
             - CRDs: `ProteusRepository`, `ProteusBackupPolicy`, `ProteusBackup`, `ProteusRestore` (`proteus.io/v1alpha1`)
             - Manual PVC backup / restore against local or S3-compatible repositories
+            - Node-agent DaemonSet + mover Pods for remote-repo bulk I/O (`dataPlane=agent`); exec fallback otherwise
             - Scheduled backups on `ProteusBackupPolicy` (UTC cron, pause/resume, keepLast prune)
             - CAS storage (chunking, BLAKE3, optional AES-256-GCM at rest)
             - Single-cluster operation
 
             ### Known limits
 
-            - Retention is keepLast only (no TTL yet); large PVCs still use mount-Pod + kube-exec
+            - Retention is keepLast only (no TTL yet); Local emptyDir repos force exec; CSI snapshots not yet
             - No multi-cluster or cross-cluster migration
             - Restore requires pre-existing target PVCs (same names); no PVC create/resize
             - GHCR package must be **Public** for anonymous cluster pulls

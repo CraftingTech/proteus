@@ -18,6 +18,10 @@ pub struct RestoreListItem {
     pub phase: Option<String>,
     pub message: Option<String>,
     pub restored_snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_plane: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigned_node: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -54,6 +58,11 @@ fn restore_list_item(obj: &ProteusRestore) -> RestoreListItem {
             .status
             .as_ref()
             .and_then(|s| s.restored_snapshot_id.clone()),
+        data_plane: obj
+            .status
+            .as_ref()
+            .and_then(|s| s.data_plane.as_ref().and_then(phase_label)),
+        assigned_node: obj.status.as_ref().and_then(|s| s.assigned_node.clone()),
     }
 }
 

@@ -30,7 +30,7 @@ proteus-crd = { path = "crates/proteus-crd" }
 proteus-api = { path = "crates/proteus-api" }
 
 # Async runtime
-tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "signal", "fs", "io-util", "sync", "time"] }
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "signal", "fs", "io-util", "sync", "time", "process"] }
 async-trait = "0.1"
 futures = "0.3"
 bytes = "1.9"
