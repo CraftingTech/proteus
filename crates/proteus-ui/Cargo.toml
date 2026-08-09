@@ -14,7 +14,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 gloo-net = { version = "0.6", features = ["json"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
-web-sys = { version = "0.3", features = ["Window"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Storage", "MediaQueryList"] }
 
 [features]
 default = ["web"]

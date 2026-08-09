@@ -1,5 +1,9 @@
 # Proteus
 
+<p align="left">
+  <img src="crates/proteus-ui/assets/brand/mark.svg" alt="Proteus mark" width="72" height="72" />
+</p>
+
 Kube-native backup and disaster recovery with an embedded operator UI — **100% Rust**.
 
 Proteus runs as a Kubernetes controller, owns its content-addressable storage (chunking, BLAKE3, AES-256-GCM, compression), and exposes a **Kopia-inspired UI** (Dioxus WASM) to configure backup destinations and drive backup/restore.

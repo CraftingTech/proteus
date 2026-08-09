@@ -1,5 +1,9 @@
+use crate::theme::ColorSchemeToggle;
 use crate::Route;
 use dioxus::prelude::*;
+
+const MARK_SVG: &str = include_str!("../assets/brand/mark.svg");
+const WORDMARK_SVG: &str = include_str!("../assets/brand/wordmark.svg");
 
 #[component]
 pub fn Shell() -> Element {
@@ -7,9 +11,15 @@ pub fn Shell() -> Element {
         div { class: "shell",
             aside { class: "nav",
                 div { class: "brand",
-                    span { class: "brand-mark", "P" }
                     div {
-                        strong { "Proteus" }
+                        class: "brand-mark",
+                        dangerous_inner_html: MARK_SVG,
+                    }
+                    div { class: "brand-copy",
+                        div {
+                            class: "brand-wordmark",
+                            dangerous_inner_html: WORDMARK_SVG,
+                        }
                         p { "Backup control" }
                     }
                 }
@@ -18,6 +28,9 @@ pub fn Shell() -> Element {
                     Link { to: Route::Repositories {}, "Repositories" }
                     Link { to: Route::Backups {}, "Backups" }
                     Link { to: Route::Inventory {}, "Inventory" }
+                }
+                div { class: "nav-footer",
+                    ColorSchemeToggle {}
                 }
             }
             main { class: "content",

@@ -2,12 +2,15 @@ mod api;
 mod components;
 mod pages;
 mod shell;
+mod theme;
 
 use dioxus::prelude::*;
 use pages::{Backups, Cluster, Inventory, PolicyRuns, Repositories};
 use shell::Shell;
+use theme::ColorSchemeProvider;
 
 const STYLES: Asset = asset!("/assets/styles.css");
+const FAVICON: Asset = asset!("/assets/favicon.svg");
 
 fn main() {
     dioxus::launch(App);
@@ -34,6 +37,9 @@ pub enum Route {
 fn App() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: STYLES }
-        Router::<Route> {}
+        document::Link { rel: "icon", r#type: "image/svg+xml", href: FAVICON }
+        ColorSchemeProvider {
+            Router::<Route> {}
+        }
     }
 }
